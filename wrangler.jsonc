@@ -1,0 +1,131 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "retainerproof",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-07-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/r/*"]
+  },
+  "vars": {
+    "APP_NAME": "RetainerProof",
+    "APP_URL": "http://localhost:5173",
+    "ENVIRONMENT": "development",
+    "EMAIL_FROM": "RetainerProof <noreply@example.com>",
+    "STRIPE_FOUNDING_PRICE_ID": "",
+    "STRIPE_STARTER_MONTHLY_PRICE_ID": "",
+    "STRIPE_STARTER_YEARLY_PRICE_ID": "",
+    "STRIPE_FREELANCER_MONTHLY_PRICE_ID": "",
+    "STRIPE_FREELANCER_YEARLY_PRICE_ID": ""
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "retainerproof-local",
+      "database_id": "local"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "REPORTS",
+      "bucket_name": "retainerproof-reports"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "MONITOR_QUEUE",
+        "queue": "retainerproof-monitor"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "retainerproof-monitor",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "dead_letter_queue": "retainerproof-monitor-dlq"
+      }
+    ]
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "browser": {
+    "binding": "BROWSER"
+  },
+  "send_email": [
+    {
+      "name": "EMAIL"
+    }
+  ],
+  "triggers": {
+    "crons": ["0 * * * *"]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "env": {
+    "production": {
+      "name": "retainerproof-production",
+      "vars": {
+        "APP_NAME": "RetainerProof",
+        "APP_URL": "https://retainerproof.aether42.com",
+        "ENVIRONMENT": "production",
+        "EMAIL_FROM": "RetainerProof <noreply@example.com>",
+        "STRIPE_FOUNDING_PRICE_ID": "",
+        "STRIPE_STARTER_MONTHLY_PRICE_ID": "",
+        "STRIPE_STARTER_YEARLY_PRICE_ID": "",
+        "STRIPE_FREELANCER_MONTHLY_PRICE_ID": "",
+        "STRIPE_FREELANCER_YEARLY_PRICE_ID": ""
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "retainerproof-production"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "REPORTS",
+          "bucket_name": "retainerproof-reports-production"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "MONITOR_QUEUE",
+            "queue": "retainerproof-monitor-production"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "retainerproof-monitor-production",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_retries": 3,
+            "dead_letter_queue": "retainerproof-monitor-production-dlq"
+          }
+        ]
+      },
+      "ai": {
+        "binding": "AI"
+      },
+      "browser": {
+        "binding": "BROWSER"
+      },
+      "send_email": [
+        {
+          "name": "EMAIL"
+        }
+      ],
+      "triggers": {
+        "crons": ["0 * * * *"]
+      }
+    }
+  }
+}

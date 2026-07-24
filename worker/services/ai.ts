@@ -1,0 +1,111 @@
+import { drizzle } from "drizzle-orm/d1";
+import { z } from "zod";
+import { aiRewrites } from "../db/schema";
+
+const rewriteOutputSchema = z.object({
+  clientSummary: z.string().min(1).max(500),
+  category: z.enum(["updates", "backups", "security", "fixes", "content", "performance", "forms", "support", "other"]),
+  importance: z.enum(["low", "medium", "high"]),
+});
+
+export type RewriteOutput = z.infer<typeof rewriteOutputSchema>;
+
+export async function rewriteForClient(
+  env: Env,
+  input: { workspaceId: string; userId: string; sourceText: string; context?: string },
+): Promise<{ rewriteId: string; result: RewriteOutput }> {
+  const db = drizzle(env.DB);
+  const rewriteId = crypto.randomUUID();
+  const safeSource = input.sourceText.trim().slice(0, 1_500);
+  const safeContext = input.context?.trim().slice(0, 200);
+  try {
+    const response = await withTimeout(env.AI.run("@cf/zai-org/glm-4.7-flash", {
+      messages: [
+        {
+          role: "system",
+          content:
+            "Rewrite technical website maintenance notes as concise, calm English for a non-technical client. State only completed facts. Do not invent results, risk, time saved, security claims, or business impact. Return JSON only.",
+        },
+        {
+          role: "user",
+          content: `${safeContext ? `Context: ${safeContext}\n` : ""}Maintenance note: ${safeSource}`,
+        },
+      ],
+      max_tokens: 220,
+      temperature: 0.2,
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "retainerproof_rewrite",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["clientSummary", "category", "importance"],
+            properties: {
+              clientSummary: { type: "string", minLength: 1, maxLength: 500 },
+              category: {
+                type: "string",
+                enum: ["updates", "backups", "security", "fixes", "content", "performance", "forms", "support", "other"],
+              },
+              importance: { type: "string", enum: ["low", "medium", "high"] },
+            },
+          },
+        },
+      },
+    }), 15_000);
+    const raw = extractModelText(response);
+    const result = rewriteOutputSchema.parse(JSON.parse(raw));
+    await db.insert(aiRewrites).values({
+      id: rewriteId,
+      workspaceId: input.workspaceId,
+      userId: input.userId,
+      sourceText: safeSource,
+      generatedJson: JSON.stringify(result),
+      status: "generated",
+      createdAt: new Date(),
+    });
+    return { rewriteId, result };
+  } catch (error) {
+    await db.insert(aiRewrites).values({
+      id: rewriteId,
+      workspaceId: input.workspaceId,
+      userId: input.userId,
+      sourceText: safeSource,
+      status: "failed",
+      errorCode: classifyAiError(error),
+      createdAt: new Date(),
+    });
+    throw new Error("AI_REWRITE_FAILED");
+  }
+}
+
+function extractModelText(response: unknown): string {
+  if (typeof response === "string") return response;
+  if (response && typeof response === "object") {
+    const record = response as Record<string, unknown>;
+    if (typeof record.response === "string") return record.response;
+    if (typeof record.result === "string") return record.result;
+  }
+  throw new Error("AI_RESPONSE_INVALID");
+}
+
+function classifyAiError(error: unknown): string {
+  if (error instanceof z.ZodError) return "SCHEMA_INVALID";
+  if (error instanceof SyntaxError) return "JSON_INVALID";
+  return "PROVIDER_ERROR";
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("AI_TIMEOUT")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
