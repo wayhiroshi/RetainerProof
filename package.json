@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:test": "vite --mode test",
     "dev:worker": "npm run build && wrangler dev --test-scheduled",
     "build": "vite build",
     "build:production": "CLOUDFLARE_ENV=production vite build",

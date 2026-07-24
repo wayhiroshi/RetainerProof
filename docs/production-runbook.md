@@ -9,7 +9,7 @@
 
 ## Cloudflare resources
 
-The Git-connected Worker must be named `retainerproof-production` because the production deploy uses the `production` Wrangler environment.
+The Git-connected Worker is named `retainerproof`. Its production build selects the `production` Wrangler environment while retaining the connected Worker name.
 
 Use these Workers Builds settings:
 

@@ -11,13 +11,14 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: "npm run dev -- --host localhost",
+    command: "npm run dev:test -- --host localhost",
     url: "http://localhost:5173/api/health",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
     env: {
       ...process.env,
       ...testEnv,
+      CLOUDFLARE_INCLUDE_PROCESS_ENV: "true",
     },
   },
   projects: [

@@ -71,7 +71,7 @@
   },
   "env": {
     "production": {
-      "name": "retainerproof-production",
+      "name": "retainerproof",
       "vars": {
         "APP_NAME": "RetainerProof",
         "APP_URL": "https://retainerproof.aether42.com",
