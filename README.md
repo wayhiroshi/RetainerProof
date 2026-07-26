@@ -30,10 +30,10 @@ Before production deployment:
 
 1. Activate Stripe Managed Payments and create eligible Starter/Freelancer monthly and annual prices.
 2. Create the refundable $5 Founding Reservation product and set its price ID.
-3. Configure the support email, verified sender, and Stripe price IDs. Add a production D1 ID only when using a manually created database instead of Wrangler provisioning.
+3. Configure a monitored support email and the Stripe price IDs. Add a production D1 ID only when using a manually created database instead of Wrangler provisioning.
 4. Create the production D1, R2 buckets, queues, and dead-letter queue.
-5. Onboard the sending domain to Cloudflare Email Sending and configure SPF, DKIM, and DMARC.
-6. Store `BETTER_AUTH_SECRET`, `STRIPE_SECRET_KEY`, and `STRIPE_WEBHOOK_SECRET` with `wrangler secret put --env production`.
+5. Use the existing Resend-verified `notify.aether42.com` sending domain and keep its SPF, DKIM, and return-path DNS records intact.
+6. Create a RetainerProof-only Resend key with sending access restricted to `notify.aether42.com`, then store `RESEND_API_KEY`, `BETTER_AUTH_SECRET`, `STRIPE_SECRET_KEY`, and `STRIPE_WEBHOOK_SECRET` with `wrangler secret put --env production`.
 7. Apply D1 migrations and deploy only after final trademark clearance and the launch gate.
 
 See:

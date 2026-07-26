@@ -31,11 +31,26 @@ Set secrets without putting them in files or logs:
 
 ```sh
 npx wrangler secret put BETTER_AUTH_SECRET --env production
+npx wrangler secret put RESEND_API_KEY --env production
 npx wrangler secret put STRIPE_SECRET_KEY --env production
 npx wrangler secret put STRIPE_WEBHOOK_SECRET --env production
 ```
 
-Configure SPF, DKIM, and DMARC for the sending domain, then update `EMAIL_FROM`. Add the Stripe price IDs for Starter monthly/yearly and Freelancer monthly/yearly.
+## Transactional email without Workers Paid
+
+RetainerProof sends transactional mail by calling the Resend REST API from the Worker. It does not use Cloudflare Email Sending or its paid-plan binding.
+
+- Reuse the existing Resend-verified `notify.aether42.com` domain.
+- Send from `RetainerProof <retainerproof@notify.aether42.com>`.
+- Create a dedicated API key with sending-only permission restricted to `notify.aether42.com`; do not reuse another product's key.
+- Store the key only as the production Worker secret `RESEND_API_KEY`.
+- Set `EMAIL_REPLY_TO` only to a real, monitored mailbox. Leaving it empty is safer than publishing an unmonitored address.
+- Preserve the domain's Resend SPF, DKIM, and return-path records.
+- Confirm the current Resend plan limits before launch.
+
+The Worker submits both HTML and plain-text bodies, uses a hashed idempotency key, requires a provider message ID, and records only the existing delivery status/message ID. It does not log the API key or message body.
+
+Add the Stripe price IDs for Starter monthly/yearly and Freelancer monthly/yearly.
 
 ## Stripe Managed Payments
 

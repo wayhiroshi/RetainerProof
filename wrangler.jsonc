@@ -15,11 +15,20 @@
     "APP_URL": "http://localhost:5173",
     "ENVIRONMENT": "development",
     "EMAIL_FROM": "RetainerProof <noreply@example.com>",
+    "EMAIL_REPLY_TO": "",
     "STRIPE_FOUNDING_PRICE_ID": "",
     "STRIPE_STARTER_MONTHLY_PRICE_ID": "",
     "STRIPE_STARTER_YEARLY_PRICE_ID": "",
     "STRIPE_FREELANCER_MONTHLY_PRICE_ID": "",
     "STRIPE_FREELANCER_YEARLY_PRICE_ID": ""
+  },
+  "secrets": {
+    "required": [
+      "BETTER_AUTH_SECRET",
+      "RESEND_API_KEY",
+      "STRIPE_SECRET_KEY",
+      "STRIPE_WEBHOOK_SECRET"
+    ]
   },
   "d1_databases": [
     {
@@ -57,11 +66,6 @@
   "browser": {
     "binding": "BROWSER"
   },
-  "send_email": [
-    {
-      "name": "EMAIL"
-    }
-  ],
   "triggers": {
     "crons": ["0 * * * *"]
   },
@@ -76,12 +80,21 @@
         "APP_NAME": "RetainerProof",
         "APP_URL": "https://retainerproof.aether42.com",
         "ENVIRONMENT": "production",
-        "EMAIL_FROM": "RetainerProof <noreply@example.com>",
+        "EMAIL_FROM": "RetainerProof <retainerproof@notify.aether42.com>",
+        "EMAIL_REPLY_TO": "",
         "STRIPE_FOUNDING_PRICE_ID": "",
         "STRIPE_STARTER_MONTHLY_PRICE_ID": "",
         "STRIPE_STARTER_YEARLY_PRICE_ID": "",
         "STRIPE_FREELANCER_MONTHLY_PRICE_ID": "",
         "STRIPE_FREELANCER_YEARLY_PRICE_ID": ""
+      },
+      "secrets": {
+        "required": [
+          "BETTER_AUTH_SECRET",
+          "RESEND_API_KEY",
+          "STRIPE_SECRET_KEY",
+          "STRIPE_WEBHOOK_SECRET"
+        ]
       },
       "d1_databases": [
         {
@@ -118,11 +131,6 @@
       "browser": {
         "binding": "BROWSER"
       },
-      "send_email": [
-        {
-          "name": "EMAIL"
-        }
-      ],
       "triggers": {
         "crons": ["0 * * * *"]
       }
