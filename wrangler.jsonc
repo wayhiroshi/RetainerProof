@@ -25,7 +25,9 @@
   "secrets": {
     "required": [
       "BETTER_AUTH_SECRET",
-      "RESEND_API_KEY"
+      "RESEND_API_KEY",
+      "STRIPE_SECRET_KEY",
+      "STRIPE_WEBHOOK_SECRET"
     ]
   },
   "d1_databases": [
