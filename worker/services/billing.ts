@@ -8,6 +8,7 @@ export type BillingPlan = "starter" | "freelancer";
 export type BillingInterval = "monthly" | "yearly";
 
 export function getStripe(env: Env): Stripe {
+  if (!env.STRIPE_SECRET_KEY) throw new Error("STRIPE_NOT_CONFIGURED");
   return new Stripe(env.STRIPE_SECRET_KEY);
 }
 
@@ -73,6 +74,7 @@ export async function createReservationCheckout(
 }
 
 export async function handleStripeWebhook(env: Env, request: Request): Promise<void> {
+  if (!env.STRIPE_WEBHOOK_SECRET) throw new Error("STRIPE_WEBHOOK_NOT_CONFIGURED");
   const body = await request.text();
   const signature = request.headers.get("stripe-signature");
   if (!signature) throw new Error("STRIPE_SIGNATURE_MISSING");
