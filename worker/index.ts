@@ -348,12 +348,24 @@ app.get("/api/reports", async (c) => {
       firstViewedAt: reports.firstViewedAt,
       finalizedAt: reports.finalizedAt,
       updatedAt: reports.updatedAt,
+      snapshotJson: reportRevisions.snapshotJson,
+      pdfKey: reportRevisions.pdfKey,
     })
     .from(reports)
     .innerJoin(clients, eq(clients.id, reports.clientId))
+    .innerJoin(
+      reportRevisions,
+      and(eq(reportRevisions.reportId, reports.id), eq(reportRevisions.revision, reports.currentRevision)),
+    )
     .where(eq(reports.workspaceId, workspaceId))
     .orderBy(desc(reports.periodStart));
-  return c.json({ reports: rows });
+  return c.json({
+    reports: rows.map(({ snapshotJson, pdfKey, ...report }) => ({
+      ...report,
+      periodLabel: (JSON.parse(snapshotJson) as ReportSnapshot).period.label,
+      pdfAvailable: Boolean(pdfKey),
+    })),
+  });
 });
 
 app.get("/api/reports/:id", async (c) => {

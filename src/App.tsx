@@ -57,6 +57,8 @@ type Report = {
   finalizedAt: string | null;
   firstViewedAt: string | null;
   latestRevisionNumber: number;
+  periodLabel: string;
+  pdfAvailable: boolean;
 };
 
 type EditableReportSnapshot = {
@@ -975,6 +977,7 @@ function ReportsPage() {
   const [open, setOpen] = useState(false);
   const [reviewing, setReviewing] = useState<{ report: Report; snapshot: EditableReportSnapshot } | null>(null);
   const [saving, setSaving] = useState(false);
+  const [repairingPdf, setRepairingPdf] = useState("");
   const [error, setError] = useState("");
   const load = useCallback(() => {
     void Promise.all([
@@ -1084,6 +1087,18 @@ function ReportsPage() {
     }
   }
 
+  async function repairPdf(report: Report) {
+    setRepairingPdf(report.id);
+    try {
+      await api(`/api/reports/${report.id}/pdf`, { method: "POST" });
+      load();
+    } catch (caught) {
+      window.alert(caught instanceof Error ? caught.message : "Could not generate the report PDF.");
+    } finally {
+      setRepairingPdf("");
+    }
+  }
+
   const reviewingRecipientEmail = reviewing
     ? clients.find((client) => client.id === reviewing.report.clientId)?.contactEmail ?? ""
     : "";
@@ -1100,9 +1115,20 @@ function ReportsPage() {
             {reports.map((report) => (
               <article key={report.id}>
                 <span className="report-doc"><Icon name="report" /></span>
-                <div><h3>{report.clientName}</h3><p>{report.periodStart} — {report.periodEnd} · Revision {report.latestRevisionNumber}</p></div>
+                <div><h3>{report.clientName}</h3><p>{report.periodLabel} · Revision {report.latestRevisionNumber}</p></div>
                 <span className={`report-status ${report.status}`}>{report.status}</span>
-                {report.status === "draft" ? <button className="button button-small" onClick={() => review(report)}>Review &amp; finalize</button> : <div className="report-final-actions"><span className="view-status">{report.firstViewedAt ? "Viewed" : "Not viewed yet"}</span><button className="text-button" onClick={() => correct(report)}>Correct</button></div>}
+                {report.status === "draft" ? <button className="button button-small" onClick={() => review(report)}>Review &amp; finalize</button> : (
+                  <div className="report-final-actions">
+                    <span className="view-status">{report.firstViewedAt ? "Viewed" : "Not viewed yet"}</span>
+                    <span className="view-status">{report.pdfAvailable ? "PDF ready" : "PDF unavailable"}</span>
+                    {!report.pdfAvailable && (
+                      <button className="text-button" onClick={() => repairPdf(report)} disabled={repairingPdf === report.id}>
+                        {repairingPdf === report.id ? "Generating…" : "Generate PDF"}
+                      </button>
+                    )}
+                    <button className="text-button" onClick={() => correct(report)}>Correct</button>
+                  </div>
+                )}
               </article>
             ))}
           </div>
