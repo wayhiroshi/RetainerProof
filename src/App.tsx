@@ -18,6 +18,7 @@ import {
 } from "react-router-dom";
 import { api, ApiError } from "./lib/api";
 import { authClient } from "./lib/auth-client";
+import { previousMonthDateRange } from "./lib/report-dates";
 import { brand } from "./config";
 
 type Client = {
@@ -986,10 +987,7 @@ function ReportsPage() {
 
   const defaultDates = useMemo(() => {
     const now = new Date();
-    return {
-      start: new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 10),
-      end: new Date(now.getFullYear(), now.getMonth(), 0).toISOString().slice(0, 10),
-    };
+    return previousMonthDateRange(now.getFullYear(), now.getMonth());
   }, []);
 
   async function create(event: FormEvent<HTMLFormElement>) {
