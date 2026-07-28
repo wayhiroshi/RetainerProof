@@ -1210,7 +1210,7 @@ function BillingPage({ me }: { me: SessionData | null }) {
   return (
     <>
       <PageHeader kicker="PLAN & BILLING" title="A plan that pays for itself" />
-      <div className="page-lead"><p>One retained maintenance client can cover {brand.name} many times over.</p><span>Current: {me?.subscription.plan ?? "starter"}</span></div>
+      <div className="page-lead"><p>One retained maintenance client can cover {brand.name} many times over.</p><span>{me?.subscription.status === "unpaid" ? "No active plan" : `Current: ${me?.subscription.plan ?? "starter"}`}</span></div>
       {me?.subscription.status === "unpaid" && (
         <section className="reservation-card">
           <div><span className="section-number">FOUNDING RESERVATION</span><h2>Reserve beta access for $5</h2><p>Refundable before launch. At launch, the reservation becomes your first Starter month.</p></div>
@@ -1219,8 +1219,8 @@ function BillingPage({ me }: { me: SessionData | null }) {
       )}
       <div className="app-price-grid">
         {(["starter", "freelancer"] as const).map((plan) => (
-          <article key={plan} className={me?.subscription.plan === plan ? "current" : ""}>
-            {me?.subscription.plan === plan && <span className="current-label">CURRENT PLAN</span>}
+          <article key={plan} className={me?.subscription.plan === plan && me?.subscription.status !== "unpaid" ? "current" : ""}>
+            {me?.subscription.plan === plan && me?.subscription.status !== "unpaid" && <span className="current-label">CURRENT PLAN</span>}
             <h2>{plan === "starter" ? "Starter" : "Freelancer"}</h2>
             <div className="price"><sup>$</sup>{plan === "starter" ? 5 : 12}<small>/ month</small></div>
             <p>Up to {plan === "starter" ? 3 : 15} active clients</p>
@@ -1233,7 +1233,7 @@ function BillingPage({ me }: { me: SessionData | null }) {
         <div className="cancel-panel"><div><b>Cancel subscription</b><p>This stops recurring billing. Data deletion is a separate request so an accidental cancellation does not erase client records.</p></div><button className="text-button danger" disabled={!!loading} onClick={cancelSubscription}>{loading === "cancel" ? "Canceling…" : "Cancel recurring plan"}</button></div>
       )}
       {me?.subscription.plan === "founding" && (
-        <div className="cancel-panel"><div><b>Founding reservation refund</b><p>Reservations are refundable before launch. Email {brand.supportEmail} from the purchasing address.</p></div></div>
+        <div className="cancel-panel"><div><b>Founding reservation</b><p>Your $5 reservation is applied automatically to the first recurring plan invoice. Reservations remain refundable before launch; email {brand.supportEmail} from the purchasing address.</p></div></div>
       )}
       <div className="cancel-panel"><div><b>Delete account data</b><p>Schedules customer content and account data for deletion after 30 days. Legally required billing records are retained.</p></div><button className="text-button danger" disabled={!!loading} onClick={requestDeletion}>{loading === "deletion" ? "Scheduling…" : "Request deletion"}</button></div>
     </>

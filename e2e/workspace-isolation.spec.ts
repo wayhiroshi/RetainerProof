@@ -86,6 +86,7 @@ test("one workspace cannot read or write another workspace data", async ({ brows
         client_reference_id: workspaceA,
         customer: `cus_${suffix}`,
         subscription: `sub_${suffix}`,
+        payment_status: "paid",
         metadata: { workspaceId: workspaceA, plan: "starter" },
       },
     },
@@ -158,6 +159,41 @@ test("one workspace cannot read or write another workspace data", async ({ brows
   const publicAfterRevoke = await request.get(`${baseURL}/api/public/reports/${shareTokenA}`);
   expect(publicAfterRevoke.status()).toBe(404);
 
+  const asyncFailurePayload = JSON.stringify({
+    id: `evt_async_failed_${suffix}`,
+    object: "event",
+    api_version: "2026-06-24.dahlia",
+    created: now,
+    data: {
+      object: {
+        id: `cs_async_failed_${suffix}`,
+        object: "checkout.session",
+        client_reference_id: workspaceA,
+        customer: `cus_${suffix}`,
+        subscription: `sub_${suffix}`,
+        payment_status: "unpaid",
+        metadata: { workspaceId: workspaceA, plan: "starter" },
+      },
+    },
+    livemode: false,
+    pending_webhooks: 1,
+    request: null,
+    type: "checkout.session.async_payment_failed",
+  });
+  const asyncFailureSignature = Stripe.webhooks.generateTestHeaderString({
+    payload: asyncFailurePayload,
+    secret: "whsec_not_configured",
+  });
+  const asyncFailureWebhook = await request.post(`${baseURL}/api/billing/webhook`, {
+    data: asyncFailurePayload,
+    headers: {
+      "content-type": "application/json",
+      "stripe-signature": asyncFailureSignature,
+    },
+  });
+  expect(asyncFailureWebhook.status()).toBe(200);
+  expect((await request.get(`${baseURL}/api/clients`)).status()).toBe(402);
+
   for (const [status, expectedAccess] of [["past_due", 200], ["canceled", 402]] as const) {
     const subscriptionPayload = JSON.stringify({
       id: `evt_${status}_${suffix}`,
@@ -168,6 +204,10 @@ test("one workspace cannot read or write another workspace data", async ({ brows
           id: `sub_${suffix}`,
           object: "subscription",
           status,
+          metadata: { workspaceId: workspaceA, plan: "starter" },
+          items: {
+            data: [{ current_period_end: later }],
+          },
         },
       },
       livemode: false,

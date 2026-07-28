@@ -28,13 +28,23 @@ Production builds use `CLOUDFLARE_ENV=production` through `npm run build:product
 
 Before production deployment:
 
-1. Activate Stripe Managed Payments and create eligible Starter/Freelancer monthly and annual prices.
-2. Create the refundable $5 Founding Reservation product and set its price ID.
-3. Configure a monitored support email and the Stripe price IDs. Add a production D1 ID only when using a manually created database instead of Wrangler provisioning.
-4. Create the production D1, R2 buckets, queues, and dead-letter queue.
-5. Use the existing Resend-verified `notify.aether42.com` sending domain and keep its SPF, DKIM, and return-path DNS records intact.
-6. Create a RetainerProof-only Resend key with sending access restricted to `notify.aether42.com`, then store `RESEND_API_KEY`, `BETTER_AUTH_SECRET`, `STRIPE_SECRET_KEY`, and `STRIPE_WEBHOOK_SECRET` with `wrangler secret put --env production`.
-7. Apply D1 migrations and deploy only after final trademark clearance and the launch gate.
+1. Activate Stripe Managed Payments and classify the RetainerProof products as `Software as a service (SaaS) - business use` (`txcd_10103001`).
+2. Create USD prices for the refundable $5 Founding Reservation, Starter ($5 monthly / $50 yearly), and Freelancer ($12 monthly / $120 yearly).
+3. Create a USD $5 `once` coupon for the Founding Reservation credit and configure all five Price IDs plus the Coupon ID in `wrangler.jsonc`.
+4. Register `https://retainerproof.aether42.com/api/billing/webhook` and subscribe it to:
+   - `checkout.session.completed`
+   - `checkout.session.async_payment_succeeded`
+   - `checkout.session.async_payment_failed`
+   - `customer.subscription.updated`
+   - `customer.subscription.deleted`
+   - `customer.subscription.paused`
+   - `customer.subscription.resumed`
+   - `charge.refunded`
+5. Configure a monitored Stripe support email. Add a production D1 ID only when using a manually created database instead of Wrangler provisioning.
+6. Create the production D1, R2 buckets, queues, and dead-letter queue.
+7. Use the existing Resend-verified `notify.aether42.com` sending domain and keep its SPF, DKIM, and return-path DNS records intact.
+8. Create a RetainerProof-only Resend key with sending access restricted to `notify.aether42.com`, then store `RESEND_API_KEY`, `BETTER_AUTH_SECRET`, `STRIPE_SECRET_KEY`, and `STRIPE_WEBHOOK_SECRET` with `wrangler secret put --env production`.
+9. Apply D1 migrations and deploy only after final trademark clearance and the launch gate.
 
 See:
 
