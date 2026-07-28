@@ -24,38 +24,18 @@ export async function rewriteForClient(
         {
           role: "system",
           content:
-            "Rewrite technical website maintenance notes as concise, calm English for a non-technical client. State only completed facts. Do not invent results, risk, time saved, security claims, or business impact. Return JSON only.",
+            'Rewrite technical website maintenance notes as concise, calm English for a non-technical client. State only completed facts. Do not invent results, risk, time saved, security claims, or business impact. Return only a JSON object with the keys "clientSummary", "category", and "importance".',
         },
         {
           role: "user",
           content: `${safeContext ? `Context: ${safeContext}\n` : ""}Maintenance note: ${safeSource}`,
         },
       ],
-      max_tokens: 220,
+      max_completion_tokens: 220,
       temperature: 0.2,
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: "retainerproof_rewrite",
-          strict: true,
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            required: ["clientSummary", "category", "importance"],
-            properties: {
-              clientSummary: { type: "string", minLength: 1, maxLength: 500 },
-              category: {
-                type: "string",
-                enum: ["updates", "backups", "security", "fixes", "content", "performance", "forms", "support", "other"],
-              },
-              importance: { type: "string", enum: ["low", "medium", "high"] },
-            },
-          },
-        },
-      },
+      chat_template_kwargs: { enable_thinking: false },
     }), 15_000);
-    const raw = extractModelText(response);
-    const result = rewriteOutputSchema.parse(JSON.parse(raw));
+    const result = parseRewriteResponse(response);
     await db.insert(aiRewrites).values({
       id: rewriteId,
       workspaceId: input.workspaceId,
@@ -80,12 +60,37 @@ export async function rewriteForClient(
   }
 }
 
-function extractModelText(response: unknown): string {
-  if (typeof response === "string") return response;
+export function parseRewriteResponse(response: unknown): RewriteOutput {
+  if (typeof response === "string") {
+    return rewriteOutputSchema.parse(JSON.parse(response));
+  }
   if (response && typeof response === "object") {
     const record = response as Record<string, unknown>;
-    if (typeof record.response === "string") return record.response;
-    if (typeof record.result === "string") return record.result;
+    if (typeof record.response === "string") {
+      return rewriteOutputSchema.parse(JSON.parse(record.response));
+    }
+    if (record.response && typeof record.response === "object") {
+      return rewriteOutputSchema.parse(record.response);
+    }
+    if (typeof record.result === "string") {
+      return rewriteOutputSchema.parse(JSON.parse(record.result));
+    }
+    if (record.result && typeof record.result === "object") {
+      return rewriteOutputSchema.parse(record.result);
+    }
+    const choices = record.choices;
+    if (Array.isArray(choices)) {
+      const firstChoice = choices[0];
+      if (firstChoice && typeof firstChoice === "object") {
+        const message = (firstChoice as Record<string, unknown>).message;
+        if (message && typeof message === "object") {
+          const content = (message as Record<string, unknown>).content;
+          if (typeof content === "string") {
+            return rewriteOutputSchema.parse(JSON.parse(content));
+          }
+        }
+      }
+    }
   }
   throw new Error("AI_RESPONSE_INVALID");
 }
@@ -93,6 +98,8 @@ function extractModelText(response: unknown): string {
 function classifyAiError(error: unknown): string {
   if (error instanceof z.ZodError) return "SCHEMA_INVALID";
   if (error instanceof SyntaxError) return "JSON_INVALID";
+  if (error instanceof Error && error.message === "AI_TIMEOUT") return "TIMEOUT";
+  if (error instanceof Error && error.message === "AI_RESPONSE_INVALID") return "RESPONSE_INVALID";
   return "PROVIDER_ERROR";
 }
 
