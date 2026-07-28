@@ -1,6 +1,12 @@
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
-import { clients, subscriptions, workspaceMembers, workspaces } from "../db/schema";
+import {
+  clients,
+  subscriptions,
+  workspaceMembers,
+  workspaceProvisioning,
+  workspaces,
+} from "../db/schema";
 
 export async function ensureWorkspace(env: Env, user: { id: string; name: string; email: string }) {
   const db = drizzle(env.DB);
@@ -18,7 +24,21 @@ export async function ensureWorkspace(env: Env, user: { id: string; name: string
   if (existing) return existing;
 
   const now = new Date();
-  const workspaceId = crypto.randomUUID();
+  await db
+    .insert(workspaceProvisioning)
+    .values({
+      userId: user.id,
+      workspaceId: crypto.randomUUID(),
+      createdAt: now,
+    })
+    .onConflictDoNothing();
+  const provisioned = await db
+    .select({ workspaceId: workspaceProvisioning.workspaceId })
+    .from(workspaceProvisioning)
+    .where(eq(workspaceProvisioning.userId, user.id))
+    .get();
+  if (!provisioned) throw new Error("WORKSPACE_PROVISION_FAILED");
+  const workspaceId = provisioned.workspaceId;
   await db.batch([
     db.insert(workspaces).values({
       id: workspaceId,
@@ -27,14 +47,14 @@ export async function ensureWorkspace(env: Env, user: { id: string; name: string
       plan: "starter",
       createdAt: now,
       updatedAt: now,
-    }),
+    }).onConflictDoNothing(),
     db.insert(workspaceMembers).values({
       id: crypto.randomUUID(),
       workspaceId,
       userId: user.id,
       role: "owner",
       createdAt: now,
-    }),
+    }).onConflictDoNothing(),
     db.insert(subscriptions).values({
       id: crypto.randomUUID(),
       workspaceId,
@@ -42,7 +62,7 @@ export async function ensureWorkspace(env: Env, user: { id: string; name: string
       plan: "starter",
       createdAt: now,
       updatedAt: now,
-    }),
+    }).onConflictDoNothing(),
   ]);
   const created = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).get();
   if (!created) throw new Error("WORKSPACE_CREATE_FAILED");

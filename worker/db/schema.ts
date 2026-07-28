@@ -72,6 +72,14 @@ export const workspaces = sqliteTable("workspaces", {
   ...timestamps,
 });
 
+export const workspaceProvisioning = sqliteTable("workspace_provisioning", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => user.id, { onDelete: "cascade" }),
+  workspaceId: text("workspace_id").notNull().unique(),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
+});
+
 export const workspaceMembers = sqliteTable(
   "workspace_members",
   {
@@ -314,6 +322,7 @@ export const schema = {
   account,
   verification,
   workspaces,
+  workspaceProvisioning,
   workspaceMembers,
   subscriptions,
   clients,
