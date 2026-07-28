@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import {
   clients,
@@ -10,6 +10,19 @@ import {
 
 export async function ensureWorkspace(env: Env, user: { id: string; name: string; email: string }) {
   const db = drizzle(env.DB);
+  const canonical = await db
+    .select({
+      id: workspaces.id,
+      name: workspaces.name,
+      timezone: workspaces.timezone,
+      plan: workspaces.plan,
+    })
+    .from(workspaceProvisioning)
+    .innerJoin(workspaces, eq(workspaces.id, workspaceProvisioning.workspaceId))
+    .where(eq(workspaceProvisioning.userId, user.id))
+    .get();
+  if (canonical) return canonical;
+
   const existing = await db
     .select({
       id: workspaces.id,
@@ -19,9 +32,24 @@ export async function ensureWorkspace(env: Env, user: { id: string; name: string
     })
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
+    .innerJoin(subscriptions, eq(subscriptions.workspaceId, workspaces.id))
     .where(eq(workspaceMembers.userId, user.id))
+    .orderBy(
+      sql`CASE WHEN ${subscriptions.status} IN ('active', 'trialing', 'past_due') THEN 0 ELSE 1 END`,
+      workspaces.createdAt,
+    )
     .get();
-  if (existing) return existing;
+  if (existing) {
+    await db
+      .insert(workspaceProvisioning)
+      .values({
+        userId: user.id,
+        workspaceId: existing.id,
+        createdAt: new Date(),
+      })
+      .onConflictDoNothing();
+    return existing;
+  }
 
   const now = new Date();
   await db
