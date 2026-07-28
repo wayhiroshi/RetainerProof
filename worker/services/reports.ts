@@ -10,6 +10,7 @@ import {
   workspaces,
 } from "../db/schema";
 import { escapeHtml } from "../lib/email";
+import { reportPeriodLabel } from "../lib/report-period";
 
 export interface ReportSnapshot {
   appName: string;
@@ -43,7 +44,11 @@ export async function buildReportSnapshot(
       .from(clients)
       .where(and(eq(clients.id, clientId), eq(clients.workspaceId, workspaceId)))
       .get(),
-    db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, workspaceId)).get(),
+    db
+      .select({ name: workspaces.name, timezone: workspaces.timezone })
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .get(),
     db
       .select()
       .from(activities)
@@ -93,9 +98,7 @@ export async function buildReportSnapshot(
     measured.length > 0 ? Math.round(measured.reduce((sum, value) => sum + value, 0) / measured.length) : null;
   const healthStatus =
     finalRuns.length === 0 ? "No checks" : passed === finalRuns.length ? "Healthy" : "Needs attention";
-  const label = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "UTC" }).format(
-    periodStart,
-  );
+  const label = reportPeriodLabel(periodStart, workspace.timezone);
 
   return {
     appName: env.APP_NAME,

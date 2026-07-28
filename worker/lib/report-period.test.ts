@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reportPeriod } from "./report-period";
+import { reportPeriod, reportPeriodLabel } from "./report-period";
 
 describe("reportPeriod", () => {
   it("includes the entire final UTC day", () => {
@@ -25,5 +25,11 @@ describe("reportPeriod", () => {
 
   it("rejects a reversed period", () => {
     expect(() => reportPeriod("2026-07-01", "2026-06-30")).toThrow("INVALID_REPORT_PERIOD");
+  });
+
+  it("labels a period in the workspace time zone", () => {
+    const tokyo = reportPeriod("2026-07-01", "2026-07-31", "Asia/Tokyo");
+    expect(tokyo.start.toISOString()).toBe("2026-06-30T15:00:00.000Z");
+    expect(reportPeriodLabel(tokyo.start, "Asia/Tokyo")).toBe("July 2026");
   });
 });

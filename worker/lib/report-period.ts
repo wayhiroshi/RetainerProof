@@ -21,6 +21,15 @@ export function isValidTimeZone(timeZone: string): boolean {
   }
 }
 
+export function reportPeriodLabel(periodStart: Date, timeZone: string): string {
+  if (!isValidTimeZone(timeZone)) throw new Error("INVALID_TIME_ZONE");
+  return new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    year: "numeric",
+    timeZone,
+  }).format(periodStart);
+}
+
 function wallMidnightToUtc(date: string, timeZone: string): Date {
   const [year, month, day] = date.split("-").map(Number);
   const target = Date.UTC(year, month - 1, day);
