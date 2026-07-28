@@ -3,7 +3,8 @@ import { testEnv } from "./e2e/test-env";
 
 export default defineConfig({
   testDir: "./e2e",
-  fullyParallel: true,
+  fullyParallel: false,
+  workers: 1,
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? "github" : "line",
   use: {
