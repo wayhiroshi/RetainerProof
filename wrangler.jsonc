@@ -16,12 +16,13 @@
     "ENVIRONMENT": "development",
     "EMAIL_FROM": "RetainerProof <noreply@example.com>",
     "EMAIL_REPLY_TO": "",
-    "STRIPE_FOUNDING_PRICE_ID": "",
-    "STRIPE_FOUNDING_CREDIT_COUPON_ID": "",
-    "STRIPE_STARTER_MONTHLY_PRICE_ID": "",
-    "STRIPE_STARTER_YEARLY_PRICE_ID": "",
-    "STRIPE_FREELANCER_MONTHLY_PRICE_ID": "",
-    "STRIPE_FREELANCER_YEARLY_PRICE_ID": ""
+    // Stripe test-mode IDs. Replace with live-mode IDs before general availability.
+    "STRIPE_FOUNDING_PRICE_ID": "price_1TyIjRPeH36fWoKeGzhE91e0",
+    "STRIPE_FOUNDING_CREDIT_COUPON_ID": "fQRw9XLC",
+    "STRIPE_STARTER_MONTHLY_PRICE_ID": "price_1TyIkNPeH36fWoKeZ1gyOxcG",
+    "STRIPE_STARTER_YEARLY_PRICE_ID": "price_1TyIl8PeH36fWoKembIX8vpI",
+    "STRIPE_FREELANCER_MONTHLY_PRICE_ID": "price_1TyIlaPeH36fWoKePk99qn1I",
+    "STRIPE_FREELANCER_YEARLY_PRICE_ID": "price_1TyIm8PeH36fWoKeCXscSGPO"
   },
   "secrets": {
     "required": [
@@ -83,12 +84,13 @@
         "ENVIRONMENT": "production",
         "EMAIL_FROM": "RetainerProof <retainerproof@notify.aether42.com>",
         "EMAIL_REPLY_TO": "",
-        "STRIPE_FOUNDING_PRICE_ID": "",
-        "STRIPE_FOUNDING_CREDIT_COUPON_ID": "",
-        "STRIPE_STARTER_MONTHLY_PRICE_ID": "",
-        "STRIPE_STARTER_YEARLY_PRICE_ID": "",
-        "STRIPE_FREELANCER_MONTHLY_PRICE_ID": "",
-        "STRIPE_FREELANCER_YEARLY_PRICE_ID": ""
+        // Stripe test-mode IDs. Replace with live-mode IDs before general availability.
+        "STRIPE_FOUNDING_PRICE_ID": "price_1TyIjRPeH36fWoKeGzhE91e0",
+        "STRIPE_FOUNDING_CREDIT_COUPON_ID": "fQRw9XLC",
+        "STRIPE_STARTER_MONTHLY_PRICE_ID": "price_1TyIkNPeH36fWoKeZ1gyOxcG",
+        "STRIPE_STARTER_YEARLY_PRICE_ID": "price_1TyIl8PeH36fWoKembIX8vpI",
+        "STRIPE_FREELANCER_MONTHLY_PRICE_ID": "price_1TyIlaPeH36fWoKePk99qn1I",
+        "STRIPE_FREELANCER_YEARLY_PRICE_ID": "price_1TyIm8PeH36fWoKeCXscSGPO"
       },
       "secrets": {
         "required": [
