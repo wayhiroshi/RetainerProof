@@ -83,7 +83,7 @@
         "APP_URL": "https://retainerproof.aether42.com",
         "ENVIRONMENT": "production",
         "EMAIL_FROM": "RetainerProof <retainerproof@notify.aether42.com>",
-        "EMAIL_REPLY_TO": "",
+        "EMAIL_REPLY_TO": "retainerproof@aether42.com",
         // Stripe test-mode IDs. Replace with live-mode IDs before general availability.
         "STRIPE_FOUNDING_PRICE_ID": "price_1TyIjRPeH36fWoKeGzhE91e0",
         "STRIPE_FOUNDING_CREDIT_COUPON_ID": "fQRw9XLC",

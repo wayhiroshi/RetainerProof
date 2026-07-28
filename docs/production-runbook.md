@@ -44,7 +44,7 @@ RetainerProof sends transactional mail by calling the Resend REST API from the W
 - Send from `RetainerProof <retainerproof@notify.aether42.com>`.
 - Create a dedicated API key with sending-only permission restricted to `notify.aether42.com`; do not reuse another product's key.
 - Store the key only as the production Worker secret `RESEND_API_KEY`.
-- Set `EMAIL_REPLY_TO` only to a real, monitored mailbox. Leaving it empty is safer than publishing an unmonitored address.
+- Use the monitored `retainerproof@aether42.com` mailbox for the public support address and `EMAIL_REPLY_TO`. It forwards to the operator's monitored inbox.
 - Preserve the domain's Resend SPF, DKIM, and return-path records.
 - Confirm the current Resend plan limits before launch.
 
