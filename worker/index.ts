@@ -444,6 +444,12 @@ app.post("/api/reports/:id/finalize", async (c) => {
   return c.json(finalized);
 });
 
+app.post("/api/reports/:id/pdf", async (c) => {
+  const workspaceId = c.get("workspace").id;
+  const result = await ensureReportPdf(c.env, workspaceId, c.req.param("id"));
+  return c.json(result);
+});
+
 app.post("/api/reports/:id/revoke", async (c) => {
   const db = drizzle(c.env.DB);
   const workspaceId = c.get("workspace").id;
@@ -597,6 +603,68 @@ const quickTemplates: Record<(typeof categories)[number], string> = {
   other: "Completed the recorded website care task.",
 };
 
+const maxReportPdfBytes = 10 * 1024 * 1024;
+
+async function ensureReportPdf(env: Env, workspaceId: string, reportId: string) {
+  const db = drizzle(env.DB);
+  const row = await db
+    .select({
+      revision: reports.currentRevision,
+      revisionId: reportRevisions.id,
+      snapshotJson: reportRevisions.snapshotJson,
+      pdfKey: reportRevisions.pdfKey,
+    })
+    .from(reports)
+    .innerJoin(
+      reportRevisions,
+      and(eq(reportRevisions.reportId, reports.id), eq(reportRevisions.revision, reports.currentRevision)),
+    )
+    .where(and(eq(reports.id, reportId), eq(reports.workspaceId, workspaceId)))
+    .get();
+  if (!row) throw new Error("REPORT_NOT_FOUND");
+  if (row.pdfKey) return { pdfStored: true, created: false };
+
+  const snapshot = JSON.parse(row.snapshotJson) as ReportSnapshot;
+  const response = await env.BROWSER.quickAction("pdf", { html: renderReportHtml(snapshot) });
+  if (!response.ok) {
+    console.error(JSON.stringify({
+      event: "pdf_generation_failed",
+      reportId,
+      stage: "render",
+      status: response.status,
+      browserMs: response.headers.get("X-Browser-Ms-Used"),
+    }));
+    throw new Error("PDF_RENDER_FAILED");
+  }
+  const pdf = await response.blob();
+  if (pdf.size === 0 || pdf.size > maxReportPdfBytes) {
+    console.error(JSON.stringify({
+      event: "pdf_generation_failed",
+      reportId,
+      stage: "size",
+      bytes: pdf.size,
+    }));
+    throw new Error("PDF_SIZE_INVALID");
+  }
+
+  const pdfKey = `${workspaceId}/${reportId}/revision-${row.revision}.pdf`;
+  try {
+    await env.REPORTS.put(pdfKey, pdf, {
+      httpMetadata: { contentType: "application/pdf" },
+    });
+    await db.update(reportRevisions).set({ pdfKey }).where(eq(reportRevisions.id, row.revisionId));
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "pdf_generation_failed",
+      reportId,
+      stage: "storage",
+      code: error instanceof Error ? error.name : "UNKNOWN",
+    }));
+    throw new Error("PDF_STORAGE_FAILED");
+  }
+  return { pdfStored: true, created: true };
+}
+
 async function finalizeReport(
   env: Env,
   workspaceId: string,
@@ -608,7 +676,6 @@ async function finalizeReport(
     .select({
       report: reports,
       snapshotJson: reportRevisions.snapshotJson,
-      revisionId: reportRevisions.id,
       recipient: clients.contactEmail,
     })
     .from(reports)
@@ -623,19 +690,7 @@ async function finalizeReport(
   const snapshot = JSON.parse(row.snapshotJson) as ReportSnapshot;
   const token = randomToken();
   const tokenHash = await sha256(token);
-  const pdfKey = `${workspaceId}/${reportId}/revision-${row.report.currentRevision}.pdf`;
-  let pdfStored = false;
-  try {
-    const response = await env.BROWSER.quickAction("pdf", { html: renderReportHtml(snapshot) });
-    if (!response.ok) throw new Error("PDF_RENDER_FAILED");
-    await env.REPORTS.put(pdfKey, response.body, {
-      httpMetadata: { contentType: "application/pdf" },
-    });
-    await db.update(reportRevisions).set({ pdfKey }).where(eq(reportRevisions.id, row.revisionId));
-    pdfStored = true;
-  } catch {
-    console.error(JSON.stringify({ event: "pdf_generation_failed", reportId }));
-  }
+  await ensureReportPdf(env, workspaceId, reportId);
   await db
     .update(reports)
     .set({
@@ -680,7 +735,7 @@ async function finalizeReport(
         .where(eq(reportDeliveries.id, deliveryId));
     }
   }
-  return { reportId, shareUrl, pdfStored };
+  return { reportId, shareUrl, pdfStored: true };
 }
 
 async function findPublicReport(env: Env, token: string) {
