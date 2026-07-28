@@ -62,18 +62,18 @@ export async function rewriteForClient(
 
 export function parseRewriteResponse(response: unknown): RewriteOutput {
   if (typeof response === "string") {
-    return rewriteOutputSchema.parse(JSON.parse(response));
+    return rewriteOutputSchema.parse(parseJsonText(response));
   }
   if (response && typeof response === "object") {
     const record = response as Record<string, unknown>;
     if (typeof record.response === "string") {
-      return rewriteOutputSchema.parse(JSON.parse(record.response));
+      return rewriteOutputSchema.parse(parseJsonText(record.response));
     }
     if (record.response && typeof record.response === "object") {
       return rewriteOutputSchema.parse(record.response);
     }
     if (typeof record.result === "string") {
-      return rewriteOutputSchema.parse(JSON.parse(record.result));
+      return rewriteOutputSchema.parse(parseJsonText(record.result));
     }
     if (record.result && typeof record.result === "object") {
       return rewriteOutputSchema.parse(record.result);
@@ -86,13 +86,19 @@ export function parseRewriteResponse(response: unknown): RewriteOutput {
         if (message && typeof message === "object") {
           const content = (message as Record<string, unknown>).content;
           if (typeof content === "string") {
-            return rewriteOutputSchema.parse(JSON.parse(content));
+            return rewriteOutputSchema.parse(parseJsonText(content));
           }
         }
       }
     }
   }
   throw new Error("AI_RESPONSE_INVALID");
+}
+
+function parseJsonText(text: string): unknown {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return JSON.parse(fenced?.[1] ?? trimmed);
 }
 
 function classifyAiError(error: unknown): string {

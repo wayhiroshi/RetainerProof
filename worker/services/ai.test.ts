@@ -24,6 +24,14 @@ describe("parseRewriteResponse", () => {
     ).toEqual(rewrite);
   });
 
+  it("accepts JSON wrapped in a Markdown code fence", () => {
+    expect(
+      parseRewriteResponse({
+        choices: [{ message: { content: `\`\`\`json\n${JSON.stringify(rewrite)}\n\`\`\`` } }],
+      }),
+    ).toEqual(rewrite);
+  });
+
   it("rejects output outside the approved schema", () => {
     expect(() =>
       parseRewriteResponse({
