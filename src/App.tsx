@@ -1017,10 +1017,9 @@ function ReportsPage() {
   async function saveAndFinalize(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!reviewing) return;
-    const email = window.prompt("Send the private report link to:", "");
-    if (email === null) return;
-    setSaving(true);
     const data = new FormData(event.currentTarget);
+    const email = String(data.get("recipientEmail") ?? "").trim();
+    setSaving(true);
     const snapshot = reviewing.snapshot;
     try {
       await api(`/api/reports/${reviewing.report.id}`, {
@@ -1085,6 +1084,10 @@ function ReportsPage() {
     }
   }
 
+  const reviewingRecipientEmail = reviewing
+    ? clients.find((client) => client.id === reviewing.report.clientId)?.contactEmail ?? ""
+    : "";
+
   return (
     <>
       <PageHeader kicker="CLIENT-VISIBLE VALUE" title="Reports">
@@ -1145,6 +1148,16 @@ function ReportsPage() {
               )) : <p>No recommendations this month.</p>}
             </fieldset>
             <label>Closing message<textarea name="closingMessage" required rows={3} defaultValue={reviewing.snapshot.closingMessage} /></label>
+            <label>
+              Send report link to
+              <input
+                name="recipientEmail"
+                type="email"
+                defaultValue={reviewingRecipientEmail}
+                placeholder="client@example.com"
+              />
+              <small className="optional">Leave blank to finalize without sending an email.</small>
+            </label>
             <div className="modal-actions"><button type="button" className="button button-ghost" onClick={() => setReviewing(null)} disabled={saving}>Keep as draft</button><button className="button" disabled={saving}>{saving ? "Finalizing…" : "Approve & finalize"} <Icon name="check" /></button></div>
           </form>
         </Modal>
