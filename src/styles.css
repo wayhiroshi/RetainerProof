@@ -45,6 +45,14 @@ svg { width: 1.1em; height: 1.1em; }
 .marketing-header nav a, .text-link { text-decoration: none; opacity: .86; }
 .marketing-header nav a:hover, .text-link:hover { opacity: 1; }
 .header-actions { display: flex; align-items: center; gap: 21px; }
+.language-link { color: inherit; font-size: 11px; font-weight: 700; text-decoration: none; opacity: .82; }
+.language-switch { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid #c9cec8; border-radius: 999px; background: rgb(255 255 255 / 66%); }
+.language-switch button { min-height: 28px; padding: 0 10px; border: 0; border-radius: 999px; background: transparent; color: #61736d; font-size: 9px; font-weight: 700; cursor: pointer; }
+.language-switch button.active { color: #fff; background: var(--green); }
+.sidebar .language-switch { width: 100%; margin-bottom: 12px; border-color: rgb(255 255 255 / 15%); background: rgb(255 255 255 / 6%); }
+.sidebar .language-switch button { flex: 1; color: #aac0b8; }
+.sidebar .language-switch button.active { color: #173e35; background: #fff; }
+.mobile-language-switch { display: none; }
 
 .hero { min-height: 610px; padding: 82px 24px 180px; background: var(--green); text-align: center; color: #fff; }
 .eyebrow { display: inline-flex; align-items: center; gap: 8px; padding: 8px 13px; border: 1px solid rgb(255 255 255 / 20%); border-radius: 30px; font-size: 11px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; }
@@ -252,6 +260,8 @@ svg { width: 1.1em; height: 1.1em; }
 .client-card > p { min-height: 32px; color: #7a8984; font-size: 9px; line-height: 1.5; }
 .client-card > a { display: flex; align-items: center; gap: 6px; font-size: 10px; color: #467361; text-decoration: none; }
 .client-card > a svg { width: 10px; }
+.inline-locale-field { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 16px; color: #6f817a; font-size: 9px; font-weight: 700; }
+.inline-locale-field select { min-height: 32px; padding: 5px 26px 5px 9px; border: 1px solid #d3d2ca; border-radius: 4px; background: #fffef9; color: var(--ink); font-size: 9px; }
 .client-card-foot { display: flex; gap: 18px; margin-top: 22px; padding-top: 15px; border-top: 1px solid #e8e6df; }
 .client-card-foot a { font-size: 9px; font-weight: 700; text-decoration: none; }
 .large-empty { min-height: 480px; background: #fffdf8; border: 1px solid #deddd5; border-radius: 6px; display: grid; place-items: center; }
@@ -287,6 +297,7 @@ svg { width: 1.1em; height: 1.1em; }
 .info-box svg { flex: 0 0 18px; margin-top: 2px; }
 .info-box p { margin: 0; font-size: 10px; line-height: 1.5; }
 .report-review-form { gap: 21px; }
+.report-language-badge { justify-self: start; padding: 6px 10px; border-radius: 999px; background: #e4eee5; color: #426e5a; font-size: 9px; font-weight: 700; }
 .review-health { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 6px 11px; padding: 14px; border: 1px solid #d8ddd5; border-radius: 5px; background: #fffef9; }
 .review-health small { grid-column: 2; color: #7b8984; font-size: 9px; }
 .review-group { margin: 0; padding: 15px; border: 1px solid #d8d6ce; border-radius: 5px; display: grid; gap: 11px; }
@@ -339,6 +350,12 @@ svg { width: 1.1em; height: 1.1em; }
   border-radius: 2px;
   box-shadow: 0 32px 90px rgb(25 52 44 / 16%);
 }
+.report-ja { font-family: "Hiragino Sans", "Yu Gothic", Meiryo, sans-serif; }
+.report-ja .report-cover h1,
+.report-ja .report-summary-copy h2,
+.report-ja .report-metrics strong,
+.report-ja .report-closing h2 { font-family: "Hiragino Mincho ProN", "Yu Mincho", serif; letter-spacing: 0; }
+.report-ja .report-cover h1 { max-width: 820px; font-size: clamp(46px, 5.4vw, 58px); line-height: 1.08; }
 .report-cover {
   min-height: 540px;
   position: relative;
@@ -574,6 +591,8 @@ svg { width: 1.1em; height: 1.1em; }
   .login-panel { min-height: 100vh; padding: 28px; }
   .sidebar { position: fixed; top: auto; right: 0; width: auto; height: 64px; padding: 7px 10px; flex-direction: row; align-items: center; }
   .sidebar > .logo, .sidebar-bottom { display: none; }
+  .mobile-language-switch { position: fixed; top: 10px; right: 12px; z-index: 12; display: block; }
+  .mobile-language-switch .language-switch { background: rgb(255 254 249 / 94%); box-shadow: 0 5px 18px rgb(25 52 44 / 12%); }
   .sidebar nav { width: 100%; grid-template-columns: repeat(4, 1fr); }
   .sidebar nav a { flex-direction: column; gap: 2px; padding: 6px; font-size: 8px; text-align: center; }
   .app-main { margin-left: 0; padding: 0 17px 90px; }
@@ -600,6 +619,7 @@ svg { width: 1.1em; height: 1.1em; }
   .report-cover-top { align-items: flex-start; gap: 20px; font-size: 8px; }
   .report-cover-copy { padding: 70px 0 40px; }
   .report-cover h1 { font-size: 48px; }
+  .report-ja .report-cover h1 { font-size: 39px; line-height: 1.12; }
   .report-cover-proof { grid-template-columns: 43px 1fr; }
   .report-cover-proof > p { grid-column: 2; }
   .report-introduction,

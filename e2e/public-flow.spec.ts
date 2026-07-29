@@ -16,6 +16,18 @@ test("sample report shows factual scheduled-check language", async ({ page }) =>
   await expect(page.getByText("100% uptime")).toHaveCount(0);
 });
 
+test("Japanese landing and sample report stay in Japanese", async ({ page }) => {
+  await page.goto("/ja");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("見えない保守作業");
+  await expect(page.locator("html")).toHaveAttribute("lang", "ja");
+  await page.getByRole("link", { name: "サンプルを見る" }).click();
+  await expect(page).toHaveURL(/\/ja\/sample$/);
+  await expect(page.getByRole("heading", { name: "ノース＆パイン・スタジオ" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "30回中30回の定期確認に成功" })).toBeVisible();
+  await expect(page.getByText("WEBサイト保守 / 月次レポート")).toBeVisible();
+  await expect(page.getByText("100% uptime")).toHaveCount(0);
+});
+
 test("magic link request completes without exposing a password field", async ({ page }) => {
   await page.goto("/login");
   await expect(page.getByLabel("Work email")).toBeVisible();

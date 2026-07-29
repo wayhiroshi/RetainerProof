@@ -1,3 +1,5 @@
+import type { Locale } from "./locale";
+
 export function reportPeriod(startDate: string, endDate: string, timeZone = "UTC"): { start: Date; end: Date } {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
     throw new Error("INVALID_REPORT_PERIOD");
@@ -21,9 +23,9 @@ export function isValidTimeZone(timeZone: string): boolean {
   }
 }
 
-export function reportPeriodLabel(periodStart: Date, timeZone: string): string {
+export function reportPeriodLabel(periodStart: Date, timeZone: string, locale: Locale = "en"): string {
   if (!isValidTimeZone(timeZone)) throw new Error("INVALID_TIME_ZONE");
-  return new Intl.DateTimeFormat("en-US", {
+  return new Intl.DateTimeFormat(locale === "ja" ? "ja-JP" : "en-US", {
     month: "long",
     year: "numeric",
     timeZone,

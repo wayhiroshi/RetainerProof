@@ -10,9 +10,11 @@ import {
   workspaces,
 } from "../db/schema";
 import { escapeHtml } from "../lib/email";
+import { localized, normalizeLocale, type Locale } from "../lib/locale";
 import { reportPeriodLabel } from "../lib/report-period";
 
 export interface ReportSnapshot {
+  locale?: Locale;
   appName: string;
   client: { name: string };
   period: { start: string; end: string; label: string };
@@ -40,7 +42,7 @@ export async function buildReportSnapshot(
   const db = drizzle(env.DB);
   const [client, workspace, activityRows, runRows] = await Promise.all([
     db
-      .select({ name: clients.name })
+      .select({ name: clients.name, reportLocale: clients.reportLocale })
       .from(clients)
       .where(and(eq(clients.id, clientId), eq(clients.workspaceId, workspaceId)))
       .get(),
@@ -98,20 +100,28 @@ export async function buildReportSnapshot(
     measured.length > 0 ? Math.round(measured.reduce((sum, value) => sum + value, 0) / measured.length) : null;
   const healthStatus =
     finalRuns.length === 0 ? "No checks" : passed === finalRuns.length ? "Healthy" : "Needs attention";
-  const label = reportPeriodLabel(periodStart, workspace.timezone);
+  const locale = normalizeLocale(client.reportLocale);
+  const label = reportPeriodLabel(periodStart, workspace.timezone, locale);
 
   return {
+    locale,
     appName: env.APP_NAME,
-    client,
+    client: { name: client.name },
     period: {
       start: periodStart.toISOString(),
       end: periodEnd.toISOString(),
       label,
     },
-    executiveSummary:
-      visible.length > 0
-        ? `${workspace.name} completed ${visible.length} website care ${visible.length === 1 ? "task" : "tasks"} during ${label}.`
-        : `Routine website care and public health checks were reviewed during ${label}.`,
+    executiveSummary: localized(locale, {
+      en:
+        visible.length > 0
+          ? `${workspace.name} completed ${visible.length} website care ${visible.length === 1 ? "task" : "tasks"} during ${label}.`
+          : `Routine website care and public health checks were reviewed during ${label}.`,
+      ja:
+        visible.length > 0
+          ? `${label}は、${workspace.name}がWebサイト保守作業を${visible.length}件完了しました。`
+          : `${label}の定期保守と公開サイトの状態確認を実施しました。`,
+    }),
     currentHealth: {
       passed,
       total: finalRuns.length,
@@ -131,7 +141,10 @@ export async function buildReportSnapshot(
       summary: row.clientSummary,
       occurredAt: row.occurredAt.toISOString(),
     })),
-    closingMessage: "Everything important has been reviewed. Reply to your website care provider with any questions.",
+    closingMessage: localized(locale, {
+      en: "Everything important has been reviewed. Reply to your website care provider with any questions.",
+      ja: "重要な項目はすべて確認済みです。ご不明な点はWebサイト保守担当者までお気軽にご連絡ください。",
+    }),
     generatedAt: new Date().toISOString(),
   };
 }
@@ -190,6 +203,8 @@ export async function saveDraft(
 }
 
 export function renderReportHtml(snapshot: ReportSnapshot): string {
+  const locale = normalizeLocale(snapshot.locale);
+  const copy = reportCopy[locale];
   const healthTone =
     snapshot.currentHealth.total === 0
       ? "neutral"
@@ -201,20 +216,29 @@ export function renderReportHtml(snapshot: ReportSnapshot): string {
       ? `<ul>${items.map((item) => `<li><span class="list-icon">${icon === "check" ? "✓" : "→"}</span><p>${escapeHtml(item.summary)}</p></li>`).join("")}</ul>`
       : `<p class="empty">${escapeHtml(emptyText)}</p>`;
   const formattedDate = (value: string) =>
-    new Date(value).toLocaleDateString("en", { month: "short", day: "numeric", timeZone: "UTC" });
-  const generatedDate = new Date(snapshot.generatedAt).toLocaleDateString("en", {
+    new Date(value).toLocaleDateString(locale === "ja" ? "ja-JP" : "en-US", {
+      month: "short",
+      day: "numeric",
+      timeZone: "UTC",
+    });
+  const generatedDate = new Date(snapshot.generatedAt).toLocaleDateString(locale === "ja" ? "ja-JP" : "en-US", {
     month: "long",
     day: "numeric",
     year: "numeric",
     timeZone: "UTC",
   });
+  const healthStatus = copy.health[snapshot.currentHealth.status];
+  const passedMessage = copy.passed(snapshot.currentHealth.passed, snapshot.currentHealth.total);
+  const careUnit = copy.careUnit(snapshot.workCompleted.length);
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="${locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 @page{size:Letter;margin:0}
 *{box-sizing:border-box}
 html{-webkit-print-color-adjust:exact;print-color-adjust:exact}
 body{font-family:Arial,Helvetica,sans-serif;color:#18372f;background:#fffdfa;margin:0}
+body.ja{font-family:"Hiragino Sans","Yu Gothic",Meiryo,sans-serif}
+body.ja h1,body.ja .cover-proof b,body.ja .summary h2,body.ja .metric strong,body.ja .closing h2{font-family:"Hiragino Mincho ProN","Yu Mincho",serif;letter-spacing:0}
 main{width:8.5in;margin:0 auto;background:#fffdfa}
 .cover{height:4.2in;position:relative;overflow:hidden;padding:.55in .65in;color:#fff;background:#1b4a3f}
 .cover:before{content:"";position:absolute;width:5.2in;height:5.2in;right:-2.1in;top:-2.2in;border:1px solid rgba(222,239,227,.18);border-radius:50%;box-shadow:0 0 0 .65in rgba(222,239,227,.035),0 0 0 1.3in rgba(222,239,227,.02)}
@@ -265,35 +289,116 @@ h1{max-width:6.8in;margin:0 0 14px;font-family:Georgia,"Times New Roman",serif;f
 footer{min-height:.95in;display:flex;justify-content:space-between;align-items:center;padding:.14in .65in;color:#75857f;font-size:6px}
 .brand{display:flex;align-items:center;gap:7px;color:#18372f;font-size:9px;font-weight:700}.brand-mark{width:20px;height:20px;display:flex;align-items:flex-end;justify-content:center;gap:2px;padding:4px;border:1px solid #18372f;border-radius:50%}.brand-mark i{display:block;width:2px;background:#18372f;border-radius:2px}.brand-mark i:nth-child(1){height:5px}.brand-mark i:nth-child(2){height:10px}.brand-mark i:nth-child(3){height:7px}
 .footer-meta{text-align:right;line-height:1.5}
-</style></head><body><main>
+</style></head><body class="${locale}"><main>
 <section class="cover">
-  <div class="cover-top"><span>WEBSITE CARE / MONTHLY RECORD</span><span class="edition">${escapeHtml(snapshot.period.label)}</span></div>
-  <div class="cover-copy"><p class="overline">Prepared exclusively for</p><h1>${escapeHtml(snapshot.client.name)}</h1><span class="period">${escapeHtml(snapshot.period.label)}</span></div>
-  <div class="cover-proof"><span class="status-mark ${healthTone}">✓</span><div><small>CARE STATUS</small><b>${escapeHtml(snapshot.currentHealth.status)}</b></div><p>Based on recorded maintenance and scheduled public-site observations.</p></div>
+  <div class="cover-top"><span>${copy.recordTitle}</span><span class="edition">${escapeHtml(snapshot.period.label)}</span></div>
+  <div class="cover-copy"><p class="overline">${copy.preparedFor}</p><h1>${escapeHtml(snapshot.client.name)}</h1><span class="period">${escapeHtml(snapshot.period.label)}</span></div>
+  <div class="cover-proof"><span class="status-mark ${healthTone}">✓</span><div><small>${copy.careStatus}</small><b>${healthStatus}</b></div><p>${copy.basedOn}</p></div>
 </section>
 <div class="content">
   <section class="summary">
-    <div class="section-heading"><span>01</span><div><small>EXECUTIVE SUMMARY</small><p>The month at a glance</p></div></div>
+    <div class="section-heading"><span>01</span><div><small>${copy.executiveSummary}</small><p>${copy.monthAtGlance}</p></div></div>
     <div class="summary-copy"><span class="quote">“</span><h2>${escapeHtml(snapshot.executiveSummary)}</h2></div>
   </section>
   <section class="metrics">
-    <article class="metric primary"><span class="status-mark ${healthTone}">✓</span><small>OBSERVED STATUS</small><strong>${escapeHtml(snapshot.currentHealth.status)}</strong><p>${snapshot.currentHealth.passed} of ${snapshot.currentHealth.total} scheduled checks passed</p></article>
-    <article class="metric"><small>CHECKS PASSED</small><strong>${snapshot.currentHealth.passed}<span> / ${snapshot.currentHealth.total}</span></strong><p>Scheduled public checks</p></article>
-    <article class="metric"><small>CARE COMPLETED</small><strong>${snapshot.workCompleted.length}<span> ${snapshot.workCompleted.length === 1 ? "item" : "items"}</span></strong><p>Client-visible work recorded</p></article>
+    <article class="metric primary"><span class="status-mark ${healthTone}">✓</span><small>${copy.observedStatus}</small><strong>${healthStatus}</strong><p>${passedMessage}</p></article>
+    <article class="metric"><small>${copy.checksPassed}</small><strong>${snapshot.currentHealth.passed}<span> / ${snapshot.currentHealth.total}</span></strong><p>${copy.scheduledPublicChecks}</p></article>
+    <article class="metric"><small>${copy.careCompleted}</small><strong>${snapshot.workCompleted.length}<span> ${careUnit}</span></strong><p>${copy.clientVisibleWork}</p></article>
   </section>
-  <p class="evidence-note">Scheduled observations only. This report does not estimate uptime or guarantee availability.</p>
+  <p class="evidence-note">${copy.evidenceNote}</p>
   <section class="work">
-    <div class="section-heading"><span>02</span><div><small>WORK COMPLETED</small><p>The care behind the result</p></div></div>
+    <div class="section-heading"><span>02</span><div><small>${copy.workCompleted}</small><p>${copy.careBehind}</p></div></div>
     <div class="work-list">${snapshot.workCompleted.length
-      ? snapshot.workCompleted.map((item, index) => `<article class="work-item"><span class="work-index">${String(index + 1).padStart(2, "0")}</span><div><b>${escapeHtml(item.category)}</b><h3>${escapeHtml(item.summary)}</h3></div><time>${escapeHtml(formattedDate(item.occurredAt))}</time></article>`).join("")
-      : '<p class="empty">No client-visible maintenance activities were recorded in this period.</p>'}</div>
+      ? snapshot.workCompleted.map((item, index) => `<article class="work-item"><span class="work-index">${String(index + 1).padStart(2, "0")}</span><div><b>${escapeHtml(categoryLabel(item.category, locale))}</b><h3>${escapeHtml(item.summary)}</h3></div><time>${escapeHtml(formattedDate(item.occurredAt))}</time></article>`).join("")
+      : `<p class="empty">${copy.noWork}</p>`}</div>
   </section>
   <section class="insights">
-    <article class="insight"><div class="insight-title"><span>03</span><small>PROBLEMS PREVENTED</small></div>${list(snapshot.problemsPrevented, "No preventable issues were recorded.", "check")}</article>
-    <article class="insight recommendations"><div class="insight-title"><span>04</span><small>RECOMMENDATIONS</small></div>${list(snapshot.recommendations, "No recommendations this month.", "arrow")}</article>
+    <article class="insight"><div class="insight-title"><span>03</span><small>${copy.problemsPrevented}</small></div>${list(snapshot.problemsPrevented, copy.noProblems, "check")}</article>
+    <article class="insight recommendations"><div class="insight-title"><span>04</span><small>${copy.recommendations}</small></div>${list(snapshot.recommendations, copy.noRecommendations, "arrow")}</article>
   </section>
-  <section class="closing"><small>CLOSING NOTE</small><h2>${escapeHtml(snapshot.closingMessage)}</h2></section>
+  <section class="closing"><small>${copy.closingNote}</small><h2>${escapeHtml(snapshot.closingMessage)}</h2></section>
 </div>
-<footer><div class="brand"><span class="brand-mark"><i></i><i></i><i></i></span>${escapeHtml(snapshot.appName)}</div><div class="footer-meta">Client-visible website care<br>Generated ${escapeHtml(generatedDate)}</div></footer>
+<footer><div class="brand"><span class="brand-mark"><i></i><i></i><i></i></span>${escapeHtml(snapshot.appName)}</div><div class="footer-meta">${copy.footerLine}<br>${copy.generated} ${escapeHtml(generatedDate)}</div></footer>
 </main></body></html>`;
+}
+
+const reportCopy = {
+  en: {
+    recordTitle: "WEBSITE CARE / MONTHLY RECORD",
+    preparedFor: "Prepared exclusively for",
+    careStatus: "CARE STATUS",
+    basedOn: "Based on recorded maintenance and scheduled public-site observations.",
+    executiveSummary: "EXECUTIVE SUMMARY",
+    monthAtGlance: "The month at a glance",
+    observedStatus: "OBSERVED STATUS",
+    checksPassed: "CHECKS PASSED",
+    scheduledPublicChecks: "Scheduled public checks",
+    careCompleted: "CARE COMPLETED",
+    clientVisibleWork: "Client-visible work recorded",
+    evidenceNote: "Scheduled observations only. This report does not estimate uptime or guarantee availability.",
+    workCompleted: "WORK COMPLETED",
+    careBehind: "The care behind the result",
+    noWork: "No client-visible maintenance activities were recorded in this period.",
+    problemsPrevented: "PROBLEMS PREVENTED",
+    noProblems: "No preventable issues were recorded.",
+    recommendations: "RECOMMENDATIONS",
+    noRecommendations: "No recommendations this month.",
+    closingNote: "CLOSING NOTE",
+    footerLine: "Client-visible website care",
+    generated: "Generated",
+    health: {
+      Healthy: "Healthy",
+      "Needs attention": "Needs attention",
+      "No checks": "No checks",
+    },
+    passed: (passed: number, total: number) => `${passed} of ${total} scheduled checks passed`,
+    careUnit: (count: number) => (count === 1 ? "item" : "items"),
+  },
+  ja: {
+    recordTitle: "WEBサイト保守 / 月次レポート",
+    preparedFor: "ご報告先",
+    careStatus: "保守状況",
+    basedOn: "記録された保守作業と、定期的な公開サイト確認に基づくレポートです。",
+    executiveSummary: "概要",
+    monthAtGlance: "今月のまとめ",
+    observedStatus: "確認時の状態",
+    checksPassed: "確認成功数",
+    scheduledPublicChecks: "定期公開サイト確認",
+    careCompleted: "完了した保守",
+    clientVisibleWork: "お客様向けに記録された作業",
+    evidenceNote: "定期確認の観測結果のみを掲載しています。稼働率の推定や可用性の保証を行うものではありません。",
+    workCompleted: "完了した作業",
+    careBehind: "結果を支える保守内容",
+    noWork: "この期間にお客様向けの保守作業記録はありません。",
+    problemsPrevented: "問題の予防",
+    noProblems: "予防対応として記録された項目はありません。",
+    recommendations: "今後のご提案",
+    noRecommendations: "今月のご提案はありません。",
+    closingNote: "おわりに",
+    footerLine: "見えるかたちで届けるWebサイト保守",
+    generated: "作成日",
+    health: {
+      Healthy: "良好",
+      "Needs attention": "要確認",
+      "No checks": "確認記録なし",
+    },
+    passed: (passed: number, total: number) => `${total}回中${passed}回の定期確認に成功`,
+    careUnit: () => "件",
+  },
+} as const;
+
+const categoryLabels: Record<string, { en: string; ja: string }> = {
+  updates: { en: "Updates", ja: "更新" },
+  backups: { en: "Backups", ja: "バックアップ" },
+  security: { en: "Security", ja: "セキュリティ" },
+  fixes: { en: "Fixes", ja: "修正" },
+  content: { en: "Content", ja: "コンテンツ" },
+  performance: { en: "Performance", ja: "パフォーマンス" },
+  forms: { en: "Forms", ja: "フォーム" },
+  support: { en: "Support", ja: "サポート" },
+  other: { en: "Other", ja: "その他" },
+};
+
+function categoryLabel(category: string, locale: Locale): string {
+  return categoryLabels[category]?.[locale] ?? category;
 }

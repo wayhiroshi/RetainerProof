@@ -53,4 +53,21 @@ describe("renderReportHtml", () => {
     expect(html).toContain("Routine care was completed &amp; verified.");
     expect(html).not.toContain("North & Pine <Studio>");
   });
+
+  it("renders Japanese report chrome without changing factual values", () => {
+    const html = renderReportHtml({
+      ...snapshot,
+      locale: "ja",
+      period: { ...snapshot.period, label: "2026年6月" },
+      executiveSummary: "定期保守と公開サイトの状態を確認しました。",
+      closingMessage: "重要な項目はすべて確認済みです。",
+    });
+
+    expect(html).toContain('<html lang="ja">');
+    expect(html).toContain("WEBサイト保守 / 月次レポート");
+    expect(html).toContain("30回中30回の定期確認に成功");
+    expect(html).toContain("セキュリティ");
+    expect(html).toContain("稼働率の推定や可用性の保証を行うものではありません");
+    expect(html).not.toContain("100% uptime");
+  });
 });

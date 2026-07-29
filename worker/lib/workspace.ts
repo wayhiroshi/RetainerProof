@@ -15,6 +15,7 @@ export async function ensureWorkspace(env: Env, user: { id: string; name: string
       id: workspaces.id,
       name: workspaces.name,
       timezone: workspaces.timezone,
+      uiLocale: workspaces.uiLocale,
       plan: workspaces.plan,
     })
     .from(workspaceProvisioning)
@@ -28,6 +29,7 @@ export async function ensureWorkspace(env: Env, user: { id: string; name: string
       id: workspaces.id,
       name: workspaces.name,
       timezone: workspaces.timezone,
+      uiLocale: workspaces.uiLocale,
       plan: workspaces.plan,
     })
     .from(workspaceMembers)

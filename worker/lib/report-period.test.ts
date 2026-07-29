@@ -31,5 +31,6 @@ describe("reportPeriod", () => {
     const tokyo = reportPeriod("2026-07-01", "2026-07-31", "Asia/Tokyo");
     expect(tokyo.start.toISOString()).toBe("2026-06-30T15:00:00.000Z");
     expect(reportPeriodLabel(tokyo.start, "Asia/Tokyo")).toBe("July 2026");
+    expect(reportPeriodLabel(tokyo.start, "Asia/Tokyo", "ja")).toBe("2026年7月");
   });
 });

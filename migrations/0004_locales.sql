@@ -1,0 +1,2 @@
+ALTER TABLE workspaces ADD COLUMN ui_locale TEXT NOT NULL DEFAULT 'en';
+ALTER TABLE clients ADD COLUMN report_locale TEXT NOT NULL DEFAULT 'en';

@@ -1,6 +1,7 @@
 import { drizzle } from "drizzle-orm/d1";
 import { z } from "zod";
 import { aiRewrites } from "../db/schema";
+import type { Locale } from "../lib/locale";
 
 const rewriteOutputSchema = z.object({
   clientSummary: z.string().min(1).max(500),
@@ -12,7 +13,7 @@ export type RewriteOutput = z.infer<typeof rewriteOutputSchema>;
 
 export async function rewriteForClient(
   env: Env,
-  input: { workspaceId: string; userId: string; sourceText: string; context?: string },
+  input: { workspaceId: string; userId: string; sourceText: string; locale?: Locale; context?: string },
 ): Promise<{ rewriteId: string; result: RewriteOutput }> {
   const db = drizzle(env.DB);
   const rewriteId = crypto.randomUUID();
@@ -23,8 +24,9 @@ export async function rewriteForClient(
       messages: [
         {
           role: "system",
-          content:
-            'Rewrite technical website maintenance notes as concise, calm English for a non-technical client. State only completed facts. Do not invent results, risk, time saved, security claims, or business impact. Return only a JSON object with the keys "clientSummary", "category", and "importance".',
+          content: `Rewrite technical website maintenance notes as concise, calm ${
+            input.locale === "ja" ? "Japanese" : "English"
+          } for a non-technical client. State only completed facts. Do not invent results, risk, time saved, security claims, or business impact. Return only a JSON object with the keys "clientSummary", "category", and "importance".`,
         },
         {
           role: "user",

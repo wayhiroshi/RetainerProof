@@ -121,6 +121,53 @@ test("one workspace cannot read or write another workspace data", async ({ brows
   expect(clientPayload.clients.map((client) => client.id)).toEqual([clientA]);
   expect(clientPayload.clients.some((client) => client.name === "Hidden Client")).toBe(false);
 
+  const localeHeaders = { origin: baseURL ?? "http://localhost:5173" };
+  expect((await request.patch(`${baseURL}/api/me/locale`, {
+    data: { locale: "ja" },
+    headers: localeHeaders,
+  })).status()).toBe(200);
+  const localizedMe = (await (await request.get(`${baseURL}/api/me`)).json()) as {
+    workspace: { uiLocale: string };
+  };
+  expect(localizedMe.workspace.uiLocale).toBe("ja");
+
+  expect((await request.patch(`${baseURL}/api/clients/${clientA}/report-locale`, {
+    data: { locale: "ja" },
+    headers: localeHeaders,
+  })).status()).toBe(200);
+  expect((await request.patch(`${baseURL}/api/clients/${clientB}/report-locale`, {
+    data: { locale: "ja" },
+    headers: localeHeaders,
+  })).status()).toBe(404);
+  const localizedClients = (await (await request.get(`${baseURL}/api/clients`)).json()) as {
+    clients: Array<{ id: string; reportLocale: string }>;
+  };
+  expect(localizedClients.clients).toEqual([
+    expect.objectContaining({ id: clientA, reportLocale: "ja" }),
+  ]);
+
+  const japaneseDraftResponse = await request.post(`${baseURL}/api/reports/draft`, {
+    data: {
+      clientId: clientA,
+      locale: "ja",
+      periodStart: "2026-01-01",
+      periodEnd: "2026-01-31",
+    },
+    headers: localeHeaders,
+  });
+  expect(japaneseDraftResponse.status()).toBe(201);
+  const japaneseDraft = (await japaneseDraftResponse.json()) as {
+    reportId: string;
+    snapshot: { locale: string; period: { label: string }; executiveSummary: string };
+  };
+  expect(japaneseDraft.snapshot.locale).toBe("ja");
+  expect(japaneseDraft.snapshot.period.label).toBe("2026年1月");
+  expect(japaneseDraft.snapshot.executiveSummary).toContain("定期保守");
+  const japaneseDetail = (await (await request.get(`${baseURL}/api/reports/${japaneseDraft.reportId}`)).json()) as {
+    snapshot: { locale: string };
+  };
+  expect(japaneseDetail.snapshot.locale).toBe("ja");
+
   const crossWorkspaceWrite = await request.post(`${baseURL}/api/activities`, {
     data: {
       clientId: clientB,

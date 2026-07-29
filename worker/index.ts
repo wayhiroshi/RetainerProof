@@ -17,6 +17,7 @@ import {
 } from "./db/schema";
 import { randomToken, sha256 } from "./lib/crypto";
 import { escapeHtml, sendTransactionalEmail } from "./lib/email";
+import { localized, normalizeLocale } from "./lib/locale";
 import { isValidTimeZone, reportPeriod } from "./lib/report-period";
 import { assertPublicHttpUrl } from "./lib/url-security";
 import { assertClientBelongsToWorkspace, ensureWorkspace } from "./lib/workspace";
@@ -35,7 +36,7 @@ import { purgeDueWorkspaceData } from "./services/deletion";
 type AppUser = { id: string; name: string; email: string };
 type AppVariables = {
   user: AppUser;
-  workspace: { id: string; name: string; timezone: string; plan: string };
+  workspace: { id: string; name: string; timezone: string; uiLocale: "en" | "ja"; plan: string };
   subscription: typeof subscriptions.$inferSelect;
 };
 
@@ -75,7 +76,9 @@ app.get("/api/public/reports/:token", async (c) => {
     );
   }
   const snapshot = publicReport.snapshot;
+  const locale = normalizeLocale(snapshot.locale);
   return c.json({
+    locale,
     appName: snapshot.appName,
     clientName: snapshot.client.name,
     periodLabel: snapshot.period.label,
@@ -87,7 +90,10 @@ app.get("/api/public/reports/:token", async (c) => {
         scheduled: snapshot.currentHealth.total,
         passed: snapshot.currentHealth.passed,
         failed: snapshot.currentHealth.total - snapshot.currentHealth.passed,
-        message: `${snapshot.currentHealth.passed} of ${snapshot.currentHealth.total} scheduled checks passed`,
+        message: localized(locale, {
+          en: `${snapshot.currentHealth.passed} of ${snapshot.currentHealth.total} scheduled checks passed`,
+          ja: `${snapshot.currentHealth.total}回中${snapshot.currentHealth.passed}回の定期確認に成功`,
+        }),
       },
       workCompleted: snapshot.workCompleted.map((item) => ({
         category: item.category,
@@ -160,6 +166,17 @@ app.get("/api/me", async (c) => {
   });
 });
 
+app.patch("/api/me/locale", async (c) => {
+  const input = z.object({ locale: z.enum(["en", "ja"]) }).parse(await c.req.json());
+  const db = drizzle(c.env.DB);
+  const workspaceId = c.get("workspace").id;
+  await db
+    .update(workspaces)
+    .set({ uiLocale: input.locale, updatedAt: new Date() })
+    .where(eq(workspaces.id, workspaceId));
+  return c.json({ locale: input.locale });
+});
+
 app.get("/api/clients", async (c) => {
   const db = drizzle(c.env.DB);
   const workspaceId = c.get("workspace").id;
@@ -169,6 +186,7 @@ app.get("/api/clients", async (c) => {
       name: clients.name,
       contactName: clients.contactName,
       contactEmail: clients.contactEmail,
+      reportLocale: clients.reportLocale,
       status: clients.status,
       assetId: managedAssets.id,
       assetName: managedAssets.name,
@@ -186,6 +204,7 @@ app.get("/api/clients", async (c) => {
       name: row.name,
       contactName: row.contactName,
       contactEmail: row.contactEmail,
+      reportLocale: row.reportLocale,
       asset: row.assetId
         ? {
             id: row.assetId,
@@ -222,6 +241,7 @@ app.post("/api/clients", async (c) => {
       name: input.name,
       contactName: input.contactName || null,
       contactEmail: input.contactEmail || null,
+      reportLocale: input.reportLocale,
       status: "active",
       createdAt: now,
       updatedAt: now,
@@ -254,6 +274,18 @@ app.post("/api/clients", async (c) => {
   return c.json({ id: clientId, assetId }, 201);
 });
 
+app.patch("/api/clients/:id/report-locale", async (c) => {
+  const input = z.object({ locale: z.enum(["en", "ja"]) }).parse(await c.req.json());
+  const db = drizzle(c.env.DB);
+  const workspaceId = c.get("workspace").id;
+  const result = await db
+    .update(clients)
+    .set({ reportLocale: input.locale, updatedAt: new Date() })
+    .where(and(eq(clients.id, c.req.param("id")), eq(clients.workspaceId, workspaceId)));
+  if (!result.meta.changes) return c.json({ error: "CLIENT_NOT_FOUND" }, 404);
+  return c.json({ locale: input.locale });
+});
+
 app.get("/api/activities", async (c) => {
   const db = drizzle(c.env.DB);
   const workspaceId = c.get("workspace").id;
@@ -284,7 +316,8 @@ app.post("/api/activities", async (c) => {
   const input = activityInputSchema.parse(await c.req.json());
   const workspaceId = c.get("workspace").id;
   await assertClientBelongsToWorkspace(c.env, workspaceId, input.clientId);
-  const template = quickTemplates[input.category];
+  const reportLocale = await clientReportLocale(c.env, workspaceId, input.clientId);
+  const template = quickTemplates[reportLocale][input.category];
   const clientSummary = input.clientDescription.trim() || template;
   const db = drizzle(c.env.DB);
   const id = crypto.randomUUID();
@@ -319,10 +352,13 @@ app.post("/api/activities", async (c) => {
 
 app.post("/api/ai/rewrite", async (c) => {
   const input = rewriteInputSchema.parse(await c.req.json());
+  await assertClientBelongsToWorkspace(c.env, c.get("workspace").id, input.clientId);
+  const locale = await clientReportLocale(c.env, c.get("workspace").id, input.clientId);
   const output = await rewriteForClient(c.env, {
     workspaceId: c.get("workspace").id,
     userId: c.get("user").id,
     sourceText: input.text,
+    locale,
     context: `Category: ${input.category}`,
   });
   return c.json({
@@ -360,11 +396,15 @@ app.get("/api/reports", async (c) => {
     .where(eq(reports.workspaceId, workspaceId))
     .orderBy(desc(reports.periodStart));
   return c.json({
-    reports: rows.map(({ snapshotJson, pdfKey, ...report }) => ({
-      ...report,
-      periodLabel: (JSON.parse(snapshotJson) as ReportSnapshot).period.label,
-      pdfAvailable: Boolean(pdfKey),
-    })),
+    reports: rows.map(({ snapshotJson, pdfKey, ...report }) => {
+      const snapshot = JSON.parse(snapshotJson) as ReportSnapshot;
+      return {
+        ...report,
+        locale: normalizeLocale(snapshot.locale),
+        periodLabel: snapshot.period.label,
+        pdfAvailable: Boolean(pdfKey),
+      };
+    }),
   });
 });
 
@@ -396,6 +436,13 @@ app.post("/api/reports/draft", async (c) => {
   const input = reportDraftSchema.parse(await c.req.json());
   const workspaceId = c.get("workspace").id;
   await assertClientBelongsToWorkspace(c.env, workspaceId, input.clientId);
+  if (input.locale) {
+    const db = drizzle(c.env.DB);
+    await db
+      .update(clients)
+      .set({ reportLocale: input.locale, updatedAt: new Date() })
+      .where(and(eq(clients.id, input.clientId), eq(clients.workspaceId, workspaceId)));
+  }
   const { start, end } = reportPeriod(input.periodStart, input.periodEnd, c.get("workspace").timezone);
   const snapshot = await buildReportSnapshot(c.env, workspaceId, input.clientId, start, end);
   return c.json(await saveDraft(c.env, workspaceId, input.clientId, start, end, snapshot), 201);
@@ -553,6 +600,7 @@ const clientInputSchema = z.object({
   name: z.string().trim().min(1).max(120),
   contactName: z.string().trim().max(120).optional().default(""),
   contactEmail: z.union([z.literal(""), z.email()]).optional().default(""),
+  reportLocale: z.enum(["en", "ja"]).default("en"),
   serviceName: z.string().trim().min(1).max(120).default("Website Care"),
   assetName: z.string().trim().min(1).max(120).default("Main website"),
   url: z.url(),
@@ -572,11 +620,13 @@ const activityInputSchema = z.object({
   aiRewriteId: z.string().min(1).optional(),
 });
 const rewriteInputSchema = z.object({
+  clientId: z.string().min(1),
   text: z.string().trim().min(3).max(1_500),
   category: z.enum(categories),
 });
 const reportDraftSchema = z.object({
   clientId: z.string().min(1),
+  locale: z.enum(["en", "ja"]).optional(),
   periodStart: z.iso.date(),
   periodEnd: z.iso.date(),
 });
@@ -603,16 +653,29 @@ const billingSchema = z.object({
   interval: z.enum(["monthly", "yearly"]),
 });
 
-const quickTemplates: Record<(typeof categories)[number], string> = {
-  updates: "Updated the website software to maintain compatibility and reliability.",
-  backups: "Reviewed the latest website backup and recovery readiness.",
-  security: "Reviewed website security and addressed the recorded maintenance item.",
-  fixes: "Corrected a website issue and confirmed the affected area is working.",
-  content: "Updated website content as requested.",
-  performance: "Improved website performance and reviewed the affected pages.",
-  forms: "Reviewed the website form and addressed the recorded issue.",
-  support: "Completed the requested website support work.",
-  other: "Completed the recorded website care task.",
+const quickTemplates: Record<"en" | "ja", Record<(typeof categories)[number], string>> = {
+  en: {
+    updates: "Updated the website software to maintain compatibility and reliability.",
+    backups: "Reviewed the latest website backup and recovery readiness.",
+    security: "Reviewed website security and addressed the recorded maintenance item.",
+    fixes: "Corrected a website issue and confirmed the affected area is working.",
+    content: "Updated website content as requested.",
+    performance: "Improved website performance and reviewed the affected pages.",
+    forms: "Reviewed the website form and addressed the recorded issue.",
+    support: "Completed the requested website support work.",
+    other: "Completed the recorded website care task.",
+  },
+  ja: {
+    updates: "互換性と安定性を保つため、Webサイトのソフトウェアを更新しました。",
+    backups: "最新のバックアップと復旧準備の状態を確認しました。",
+    security: "Webサイトのセキュリティを確認し、記録された保守項目に対応しました。",
+    fixes: "Webサイトの問題を修正し、対象箇所が正常に動作することを確認しました。",
+    content: "ご依頼に沿ってWebサイトのコンテンツを更新しました。",
+    performance: "Webサイトの表示性能を改善し、対象ページを確認しました。",
+    forms: "Webサイトのフォームを確認し、記録された問題に対応しました。",
+    support: "ご依頼のWebサイトサポート作業を完了しました。",
+    other: "記録されたWebサイト保守作業を完了しました。",
+  },
 };
 
 const maxReportPdfBytes = 10 * 1024 * 1024;
@@ -700,6 +763,7 @@ async function finalizeReport(
     .get();
   if (!row) throw new Error("REPORT_NOT_FOUND");
   const snapshot = JSON.parse(row.snapshotJson) as ReportSnapshot;
+  const locale = normalizeLocale(snapshot.locale);
   const token = randomToken();
   const tokenHash = await sha256(token);
   await ensureReportPdf(env, workspaceId, reportId);
@@ -728,9 +792,18 @@ async function finalizeReport(
     try {
       const sent = await sendTransactionalEmail(env, {
         to: recipient,
-        subject: `${snapshot.client.name} — ${snapshot.period.label} website care report`,
-        html: `<p>Your website care report is ready.</p><p><a href="${escapeHtml(shareUrl)}">View the report</a></p>`,
-        text: `Your website care report is ready: ${shareUrl}`,
+        subject: localized(locale, {
+          en: `${snapshot.client.name} — ${snapshot.period.label} website care report`,
+          ja: `${snapshot.client.name} — ${snapshot.period.label} Webサイト保守レポート`,
+        }),
+        html: localized(locale, {
+          en: `<p>Your website care report is ready.</p><p><a href="${escapeHtml(shareUrl)}">View the report</a></p>`,
+          ja: `<p>Webサイト保守レポートが完成しました。</p><p><a href="${escapeHtml(shareUrl)}">レポートを見る</a></p>`,
+        }),
+        text: localized(locale, {
+          en: `Your website care report is ready: ${shareUrl}`,
+          ja: `Webサイト保守レポートが完成しました: ${shareUrl}`,
+        }),
       });
       await db
         .update(reportDeliveries)
@@ -769,6 +842,17 @@ async function findPublicReport(env: Env, token: string) {
     .get();
   if (!row) return null;
   return { ...row, snapshot: JSON.parse(row.snapshotJson) as ReportSnapshot };
+}
+
+async function clientReportLocale(env: Env, workspaceId: string, clientId: string): Promise<"en" | "ja"> {
+  const db = drizzle(env.DB);
+  const row = await db
+    .select({ reportLocale: clients.reportLocale })
+    .from(clients)
+    .where(and(eq(clients.id, clientId), eq(clients.workspaceId, workspaceId)))
+    .get();
+  if (!row) throw new Error("CLIENT_NOT_FOUND");
+  return normalizeLocale(row.reportLocale);
 }
 
 function safeFilename(value: string): string {

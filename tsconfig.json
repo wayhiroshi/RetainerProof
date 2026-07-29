@@ -17,6 +17,6 @@
     "jsx": "react-jsx",
     "types": ["./worker-configuration.d.ts", "vite/client", "node"]
   },
-  "include": ["src", "worker", "e2e", "vite.config.ts", "vitest.config.ts", "playwright.config.ts"],
+  "include": ["src", "worker", "e2e", "scripts", "vite.config.ts", "vitest.config.ts", "playwright.config.ts"],
   "exclude": ["dist", "node_modules"]
 }
