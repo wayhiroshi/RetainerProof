@@ -1292,6 +1292,20 @@ function PublicReportPage() {
 }
 
 function PublicReportView({ report, sample = false }: { report: PublicReport; sample?: boolean }) {
+  const healthState =
+    report.snapshot.currentHealth.scheduled === 0
+      ? "No checks"
+      : report.snapshot.currentHealth.failed === 0
+        ? "Healthy"
+        : "Needs attention";
+  const healthTone =
+    report.snapshot.currentHealth.scheduled === 0
+      ? "neutral"
+      : report.snapshot.currentHealth.failed === 0
+        ? "healthy"
+        : "attention";
+  const careItems = report.snapshot.workCompleted.length;
+  const generatedDate = new Date(report.generatedAt);
   return (
     <>
       <header className="public-header">
@@ -1303,42 +1317,127 @@ function PublicReportView({ report, sample = false }: { report: PublicReport; sa
         </div>
       </header>
       <main className="public-report">
-        <section className="report-title">
-          <span>MONTHLY WEBSITE CARE REPORT</span>
-          <h1>{report.clientName}</h1>
-          <p>{report.periodLabel}</p>
-        </section>
-        <section className="report-section report-executive">
-          <span className="report-section-no">01</span><div><small>EXECUTIVE SUMMARY</small><h2>{report.snapshot.executiveSummary}</h2></div>
-        </section>
-        <section className="report-section">
-          <span className="report-section-no">02</span>
-          <div className="wide">
-            <small>CURRENT HEALTH</small>
-            <div className="health-card">
-              <span className="health-check"><Icon name="check" /></span>
-              <div><h2>{report.snapshot.currentHealth.message}</h2><p>Observed during scheduled public website checks in this reporting period.</p></div>
-              <b>{report.snapshot.currentHealth.passed}/{report.snapshot.currentHealth.scheduled}</b>
+        <section className="report-cover">
+          <div className="report-cover-orbit" aria-hidden="true" />
+          <div className="report-cover-top">
+            <span>WEBSITE CARE / MONTHLY RECORD</span>
+            <span className="report-cover-edition">
+              {generatedDate.toLocaleDateString("en", { month: "2-digit", year: "numeric" }).replace("/", " / ")}
+            </span>
+          </div>
+          <div className="report-cover-copy">
+            <p>Prepared exclusively for</p>
+            <h1>{report.clientName}</h1>
+            <span className="report-period">{report.periodLabel}</span>
+          </div>
+          <div className="report-cover-proof">
+            <span className={`report-status-mark ${healthTone}`}><Icon name="check" /></span>
+            <div>
+              <small>CARE STATUS</small>
+              <b>{healthState}</b>
             </div>
+            <p>Based on recorded maintenance and scheduled public-site observations.</p>
           </div>
         </section>
-        <section className="report-section">
-          <span className="report-section-no">03</span>
-          <div className="wide">
-            <small>WORK COMPLETED</small>
-            <div className="public-work-list">
-              {report.snapshot.workCompleted.length ? report.snapshot.workCompleted.map((work, index) => (
-                <article key={`${work.date}-${index}`}><span>{String(index + 1).padStart(2, "0")}</span><div><b>{work.category}</b><h3>{work.description}</h3></div><time>{new Date(work.date).toLocaleDateString("en", { month: "short", day: "numeric" })}</time></article>
-              )) : <p>No client-visible maintenance activities were recorded in this period.</p>}
-            </div>
+
+        <section className="report-introduction">
+          <div className="report-section-heading">
+            <span>01</span>
+            <div><small>EXECUTIVE SUMMARY</small><p>The month at a glance</p></div>
+          </div>
+          <div className="report-summary-copy">
+            <span className="report-quote-mark" aria-hidden="true">“</span>
+            <h2>{report.snapshot.executiveSummary}</h2>
           </div>
         </section>
-        <section className="report-two-column">
-          <div><small>PROBLEMS PREVENTED</small><ul>{report.snapshot.problemsPrevented.length ? report.snapshot.problemsPrevented.map((item) => <li key={item}><Icon name="check" /> {item}</li>) : <li>No preventable issues were recorded.</li>}</ul></div>
-          <div><small>RECOMMENDATIONS</small><ul>{report.snapshot.recommendations.length ? report.snapshot.recommendations.map((item) => <li key={item}><Icon name="arrow" /> {item}</li>) : <li>No recommendations this month.</li>}</ul></div>
+
+        <section className="report-evidence">
+          <div className="report-section-heading light">
+            <span>02</span>
+            <div><small>CURRENT HEALTH</small><p>Evidence, not estimates</p></div>
+          </div>
+          <div className="report-metrics">
+            <article className="report-metric-primary">
+              <span className={`report-status-mark ${healthTone}`}><Icon name="check" /></span>
+              <small>OBSERVED STATUS</small>
+              <strong>{healthState}</strong>
+              <h3 className="report-observation">{report.snapshot.currentHealth.message}</h3>
+            </article>
+            <article>
+              <small>CHECKS PASSED</small>
+              <strong>{report.snapshot.currentHealth.passed}<span> / {report.snapshot.currentHealth.scheduled}</span></strong>
+              <p>Scheduled public checks</p>
+            </article>
+            <article>
+              <small>CARE COMPLETED</small>
+              <strong>{careItems}<span> {careItems === 1 ? "item" : "items"}</span></strong>
+              <p>Client-visible work recorded</p>
+            </article>
+          </div>
+          <p className="report-evidence-note">
+            RetainerProof reports scheduled observations only. It does not estimate uptime or make guarantees about availability.
+          </p>
         </section>
-        <section className="report-closing"><small>CLOSING MESSAGE</small><h2>{report.snapshot.closingMessage}</h2></section>
-        <footer className="report-footer"><Logo dark /><p>Prepared with {report.appName} · Client-visible website care</p><small>Generated {new Date(report.generatedAt).toLocaleDateString()}</small></footer>
+
+        <section className="report-work">
+          <div className="report-section-heading">
+            <span>03</span>
+            <div><small>WORK COMPLETED</small><p>The care behind the result</p></div>
+          </div>
+          <div className="public-work-list">
+            {report.snapshot.workCompleted.length ? report.snapshot.workCompleted.map((work, index) => (
+              <article key={`${work.date}-${index}`}>
+                <span className="work-index">{String(index + 1).padStart(2, "0")}</span>
+                <div>
+                  <b>{work.category}</b>
+                  <h3>{work.description}</h3>
+                </div>
+                <time>{new Date(work.date).toLocaleDateString("en", { month: "short", day: "numeric" })}</time>
+              </article>
+            )) : (
+              <div className="report-empty"><span>—</span><p>No client-visible maintenance activities were recorded in this period.</p></div>
+            )}
+          </div>
+        </section>
+
+        <section className="report-insights">
+          <article>
+            <div className="insight-heading">
+              <span>04</span>
+              <div><small>PROBLEMS PREVENTED</small><p>Quiet wins</p></div>
+            </div>
+            <ul>
+              {report.snapshot.problemsPrevented.length
+                ? report.snapshot.problemsPrevented.map((item) => <li key={item}><span><Icon name="check" /></span><p>{item}</p></li>)
+                : <li className="empty-insight"><p>No preventable issues were recorded.</p></li>}
+            </ul>
+          </article>
+          <article className="recommendations-card">
+            <div className="insight-heading">
+              <span>05</span>
+              <div><small>RECOMMENDATIONS</small><p>What comes next</p></div>
+            </div>
+            <ul>
+              {report.snapshot.recommendations.length
+                ? report.snapshot.recommendations.map((item) => <li key={item}><span><Icon name="arrow" /></span><p>{item}</p></li>)
+                : <li className="empty-insight"><p>No recommendations this month.</p></li>}
+            </ul>
+          </article>
+        </section>
+
+        <section className="report-closing">
+          <span className="report-closing-mark" aria-hidden="true">RP</span>
+          <small>CLOSING NOTE</small>
+          <h2>{report.snapshot.closingMessage}</h2>
+          <div className="report-closing-rule"><span /></div>
+        </section>
+        <footer className="report-footer">
+          <div><Logo dark /><p>Client-visible website care, presented clearly.</p></div>
+          <div className="report-footer-meta">
+            <span>Prepared with {report.appName}</span>
+            <small>Generated {generatedDate.toLocaleDateString("en", { month: "long", day: "numeric", year: "numeric" })}</small>
+          </div>
+        </footer>
       </main>
     </>
   );
