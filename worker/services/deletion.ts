@@ -1,6 +1,7 @@
 import { count, eq, isNotNull, lte, and } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { aiRewrites, clients, user, workspaceMembers, workspaces } from "../db/schema";
+import { revokeSearchConsoleConnection } from "./search-console";
 
 export async function purgeDueWorkspaceData(env: Env): Promise<number> {
   const db = drizzle(env.DB);
@@ -11,6 +12,7 @@ export async function purgeDueWorkspaceData(env: Env): Promise<number> {
     .limit(25);
 
   for (const workspace of due) {
+    await revokeSearchConsoleConnection(env, workspace.id);
     const members = await db
       .select({ userId: workspaceMembers.userId })
       .from(workspaceMembers)

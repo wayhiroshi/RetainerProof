@@ -12,6 +12,9 @@ import {
   reportDeliveries,
   reportRevisions,
   reports,
+  searchConsoleConnections,
+  searchConsoleKeywords,
+  searchConsoleProperties,
   services,
   subscriptions,
   workspaces,
@@ -33,6 +36,17 @@ import {
 import { enqueueDueChecks, type MonitorMessage, processMonitorMessage } from "./services/monitoring";
 import { buildReportSnapshot, renderReportHtml, saveDraft, type ReportSnapshot } from "./services/reports";
 import { purgeDueWorkspaceData } from "./services/deletion";
+import {
+  completeSearchConsoleAuthorization,
+  createSearchConsoleAuthorizationUrl,
+  enqueueDueSearchConsoleSyncs,
+  isSearchConsoleConfigured,
+  listSearchConsoleSites,
+  normalizeSearchKeyword,
+  revokeSearchConsoleConnection,
+  type SearchConsoleSyncMessage,
+  syncClientSearchConsole,
+} from "./services/search-console";
 
 type AppUser = { id: string; name: string; email: string };
 type AppVariables = {
@@ -98,6 +112,7 @@ app.get("/api/public/reports/:token", async (c) => {
         targets: snapshot.currentHealth.targets ?? [],
       },
       maintenanceCoverage: snapshot.maintenanceCoverage ?? [],
+      searchPerformance: snapshot.searchPerformance ?? null,
       workCompleted: snapshot.workCompleted.map((item) => ({
         category: item.category,
         description: item.summary,
@@ -194,6 +209,239 @@ app.patch("/api/me/locale", async (c) => {
     .set({ uiLocale: input.locale, updatedAt: new Date() })
     .where(eq(workspaces.id, workspaceId));
   return c.json({ locale: input.locale });
+});
+
+app.get("/api/search-console", async (c) => {
+  const workspaceId = c.get("workspace").id;
+  const db = drizzle(c.env.DB);
+  const [connection, properties, keywords] = await Promise.all([
+    db
+      .select({
+        connectedAt: searchConsoleConnections.connectedAt,
+        lastError: searchConsoleConnections.lastError,
+      })
+      .from(searchConsoleConnections)
+      .where(eq(searchConsoleConnections.workspaceId, workspaceId))
+      .get(),
+    db
+      .select({
+        id: searchConsoleProperties.id,
+        clientId: searchConsoleProperties.clientId,
+        clientName: clients.name,
+        siteUrl: searchConsoleProperties.siteUrl,
+        permissionLevel: searchConsoleProperties.permissionLevel,
+        lastSyncedAt: searchConsoleProperties.lastSyncedAt,
+        lastError: searchConsoleProperties.lastError,
+      })
+      .from(searchConsoleProperties)
+      .innerJoin(clients, eq(clients.id, searchConsoleProperties.clientId))
+      .where(eq(searchConsoleProperties.workspaceId, workspaceId))
+      .orderBy(asc(clients.name)),
+    db
+      .select({
+        id: searchConsoleKeywords.id,
+        clientId: searchConsoleKeywords.clientId,
+        propertyId: searchConsoleKeywords.propertyId,
+        keyword: searchConsoleKeywords.keyword,
+        enabled: searchConsoleKeywords.enabled,
+      })
+      .from(searchConsoleKeywords)
+      .where(eq(searchConsoleKeywords.workspaceId, workspaceId))
+      .orderBy(asc(searchConsoleKeywords.createdAt)),
+  ]);
+  return c.json({
+    configured: isSearchConsoleConfigured(c.env),
+    connection: connection
+      ? {
+          connectedAt: connection.connectedAt,
+          lastError: connection.lastError,
+        }
+      : null,
+    properties,
+    keywords,
+  });
+});
+
+app.post("/api/search-console/connect", async (c) => {
+  const url = await createSearchConsoleAuthorizationUrl(c.env, {
+    workspaceId: c.get("workspace").id,
+    userId: c.get("user").id,
+  });
+  return c.json({ url });
+});
+
+app.get("/api/search-console/callback", async (c) => {
+  const state = c.req.query("state");
+  const code = c.req.query("code");
+  const denied = c.req.query("error");
+  if (denied || !state || !code) {
+    return c.redirect(`${c.env.APP_URL}/app/search?google=denied`);
+  }
+  try {
+    await completeSearchConsoleAuthorization(c.env, {
+      workspaceId: c.get("workspace").id,
+      userId: c.get("user").id,
+      state,
+      code,
+    });
+    return c.redirect(`${c.env.APP_URL}/app/search?google=connected`);
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "search_console_oauth_failed",
+      code: error instanceof Error ? error.message : "GOOGLE_OAUTH_FAILED",
+    }));
+    return c.redirect(`${c.env.APP_URL}/app/search?google=failed`);
+  }
+});
+
+app.get("/api/search-console/sites", async (c) => {
+  const sites = await listSearchConsoleSites(c.env, c.get("workspace").id);
+  return c.json({ sites });
+});
+
+app.post("/api/search-console/properties", async (c) => {
+  const input = searchConsolePropertySchema.parse(await c.req.json());
+  const workspaceId = c.get("workspace").id;
+  await assertClientBelongsToWorkspace(c.env, workspaceId, input.clientId);
+  const db = drizzle(c.env.DB);
+  const connection = await db
+    .select({ id: searchConsoleConnections.id })
+    .from(searchConsoleConnections)
+    .where(eq(searchConsoleConnections.workspaceId, workspaceId))
+    .get();
+  if (!connection) return c.json({ error: "SEARCH_CONSOLE_NOT_CONNECTED" }, 404);
+  const sites = await listSearchConsoleSites(c.env, workspaceId);
+  const site = sites.find((candidate) => candidate.siteUrl === input.siteUrl);
+  if (!site || site.permissionLevel === "siteUnverifiedUser") {
+    return c.json({ error: "SEARCH_CONSOLE_SITE_NOT_AVAILABLE" }, 404);
+  }
+  const existing = await db
+    .select({ id: searchConsoleProperties.id, siteUrl: searchConsoleProperties.siteUrl })
+    .from(searchConsoleProperties)
+    .where(and(
+      eq(searchConsoleProperties.workspaceId, workspaceId),
+      eq(searchConsoleProperties.clientId, input.clientId),
+    ))
+    .get();
+  const now = new Date();
+  if (existing?.siteUrl === site.siteUrl) {
+    await db
+      .update(searchConsoleProperties)
+      .set({ permissionLevel: site.permissionLevel, lastError: null, updatedAt: now })
+      .where(and(
+        eq(searchConsoleProperties.id, existing.id),
+        eq(searchConsoleProperties.workspaceId, workspaceId),
+      ));
+    return c.json({ id: existing.id });
+  }
+  if (existing) {
+    await db
+      .delete(searchConsoleProperties)
+      .where(and(
+        eq(searchConsoleProperties.id, existing.id),
+        eq(searchConsoleProperties.workspaceId, workspaceId),
+      ));
+  }
+  const id = crypto.randomUUID();
+  await db.insert(searchConsoleProperties).values({
+    id,
+    workspaceId,
+    connectionId: connection.id,
+    clientId: input.clientId,
+    siteUrl: site.siteUrl,
+    permissionLevel: site.permissionLevel,
+    createdAt: now,
+    updatedAt: now,
+  });
+  return c.json({ id }, 201);
+});
+
+app.delete("/api/search-console/properties/:id", async (c) => {
+  const db = drizzle(c.env.DB);
+  const result = await db
+    .delete(searchConsoleProperties)
+    .where(and(
+      eq(searchConsoleProperties.id, c.req.param("id")),
+      eq(searchConsoleProperties.workspaceId, c.get("workspace").id),
+    ));
+  if (!result.meta.changes) return c.json({ error: "SEARCH_CONSOLE_PROPERTY_NOT_FOUND" }, 404);
+  return c.json({ deleted: true });
+});
+
+app.post("/api/search-console/keywords", async (c) => {
+  const input = searchConsoleKeywordSchema.parse(await c.req.json());
+  const workspaceId = c.get("workspace").id;
+  await assertClientBelongsToWorkspace(c.env, workspaceId, input.clientId);
+  const db = drizzle(c.env.DB);
+  const property = await db
+    .select({ id: searchConsoleProperties.id })
+    .from(searchConsoleProperties)
+    .where(and(
+      eq(searchConsoleProperties.id, input.propertyId),
+      eq(searchConsoleProperties.workspaceId, workspaceId),
+      eq(searchConsoleProperties.clientId, input.clientId),
+    ))
+    .get();
+  if (!property) return c.json({ error: "SEARCH_CONSOLE_PROPERTY_NOT_FOUND" }, 404);
+  const existingKeywords = await db
+    .select({ id: searchConsoleKeywords.id })
+    .from(searchConsoleKeywords)
+    .where(and(
+      eq(searchConsoleKeywords.workspaceId, workspaceId),
+      eq(searchConsoleKeywords.clientId, input.clientId),
+      eq(searchConsoleKeywords.enabled, true),
+    ));
+  if (existingKeywords.length >= 10) {
+    return c.json({ error: "SEARCH_CONSOLE_KEYWORD_LIMIT_REACHED", limit: 10 }, 409);
+  }
+  const normalizedKeyword = normalizeSearchKeyword(input.keyword);
+  const duplicate = await db
+    .select({ id: searchConsoleKeywords.id })
+    .from(searchConsoleKeywords)
+    .where(and(
+      eq(searchConsoleKeywords.propertyId, property.id),
+      eq(searchConsoleKeywords.normalizedKeyword, normalizedKeyword),
+    ))
+    .get();
+  if (duplicate) return c.json({ error: "SEARCH_CONSOLE_KEYWORD_EXISTS" }, 409);
+  const id = crypto.randomUUID();
+  const now = new Date();
+  await db.insert(searchConsoleKeywords).values({
+    id,
+    workspaceId,
+    clientId: input.clientId,
+    propertyId: property.id,
+    keyword: input.keyword,
+    normalizedKeyword,
+    enabled: true,
+    createdAt: now,
+    updatedAt: now,
+  });
+  return c.json({ id }, 201);
+});
+
+app.delete("/api/search-console/keywords/:id", async (c) => {
+  const db = drizzle(c.env.DB);
+  const result = await db
+    .delete(searchConsoleKeywords)
+    .where(and(
+      eq(searchConsoleKeywords.id, c.req.param("id")),
+      eq(searchConsoleKeywords.workspaceId, c.get("workspace").id),
+    ));
+  if (!result.meta.changes) return c.json({ error: "SEARCH_CONSOLE_KEYWORD_NOT_FOUND" }, 404);
+  return c.json({ deleted: true });
+});
+
+app.post("/api/search-console/sync", async (c) => {
+  const input = z.object({ clientId: z.string().min(1) }).parse(await c.req.json());
+  const workspaceId = c.get("workspace").id;
+  await assertClientBelongsToWorkspace(c.env, workspaceId, input.clientId);
+  return c.json(await syncClientSearchConsole(c.env, workspaceId, input.clientId));
+});
+
+app.delete("/api/search-console/connection", async (c) => {
+  await revokeSearchConsoleConnection(c.env, c.get("workspace").id);
+  return c.json({ disconnected: true });
 });
 
 app.get("/api/clients", async (c) => {
@@ -687,12 +935,21 @@ app.notFound((c) => c.env.ASSETS.fetch(c.req.raw));
 app.onError((error, c) => {
   const code = error instanceof z.ZodError ? "VALIDATION_ERROR" : error instanceof Error ? error.message : "INTERNAL_ERROR";
   console.error(JSON.stringify({ event: "request_error", path: c.req.path, code }));
-  const status = code === "VALIDATION_ERROR"
+  const status = code === "VALIDATION_ERROR" || code === "GOOGLE_OAUTH_STATE_INVALID"
     ? 400
-    : code === "CLIENT_NOT_FOUND" || code === "REPORT_NOT_FOUND"
+    : code === "CLIENT_NOT_FOUND" ||
+        code === "REPORT_NOT_FOUND" ||
+        code === "SEARCH_CONSOLE_NOT_CONNECTED" ||
+        code === "SEARCH_CONSOLE_PROPERTY_NOT_FOUND" ||
+        code === "SEARCH_CONSOLE_KEYWORD_NOT_FOUND"
       ? 404
-      : code === "FINALIZED_REPORT_IMMUTABLE"
+      : code === "FINALIZED_REPORT_IMMUTABLE" ||
+          code === "GOOGLE_REAUTH_REQUIRED" ||
+          code === "SEARCH_CONSOLE_KEYWORD_EXISTS" ||
+          code === "SEARCH_CONSOLE_KEYWORD_LIMIT_REACHED"
         ? 409
+        : code === "SEARCH_CONSOLE_NOT_CONFIGURED"
+          ? 503
         : 500;
   return c.json({ error: code }, status);
 });
@@ -701,23 +958,38 @@ export default {
   fetch: app.fetch,
   async scheduled(_controller, env, ctx) {
     ctx.waitUntil(
-      Promise.all([enqueueDueChecks(env), purgeDueWorkspaceData(env)]).then(([count, purged]) => {
-        console.log(JSON.stringify({ event: "scheduled_complete", monitorEnqueued: count, workspacesPurged: purged }));
+      Promise.all([enqueueDueChecks(env), enqueueDueSearchConsoleSyncs(env), purgeDueWorkspaceData(env)]).then(([count, searchConsoleCount, purged]) => {
+        console.log(JSON.stringify({
+          event: "scheduled_complete",
+          monitorEnqueued: count,
+          searchConsoleEnqueued: searchConsoleCount,
+          workspacesPurged: purged,
+        }));
       }),
     );
   },
   async queue(batch, env) {
     for (const message of batch.messages) {
       try {
-        await processMonitorMessage(env, message.body);
+        if (isSearchConsoleSyncMessage(message.body)) {
+          await syncClientSearchConsole(env, message.body.workspaceId, message.body.clientId);
+        } else {
+          await processMonitorMessage(env, message.body);
+        }
         message.ack();
       } catch {
-        console.error(JSON.stringify({ event: "monitor_queue_error", messageId: message.id }));
+        console.error(JSON.stringify({ event: "queue_error", messageId: message.id }));
         message.retry();
       }
     }
   },
-} satisfies ExportedHandler<Env, MonitorMessage>;
+} satisfies ExportedHandler<Env, MonitorMessage | SearchConsoleSyncMessage>;
+
+function isSearchConsoleSyncMessage(
+  message: MonitorMessage | SearchConsoleSyncMessage,
+): message is SearchConsoleSyncMessage {
+  return "type" in message && message.type === "search_console_sync";
+}
 
 const clientInputSchema = z.object({
   name: z.string().trim().min(1).max(120),
@@ -733,6 +1005,15 @@ const clientInputSchema = z.object({
 
 const categories = ["updates", "backups", "security", "fixes", "content", "performance", "forms", "support", "other"] as const;
 const maintenanceFrequencies = ["daily", "weekly", "monthly", "quarterly", "as_needed"] as const;
+const searchConsolePropertySchema = z.object({
+  clientId: z.string().min(1),
+  siteUrl: z.string().trim().min(1).max(2_000),
+});
+const searchConsoleKeywordSchema = z.object({
+  clientId: z.string().min(1),
+  propertyId: z.string().min(1),
+  keyword: z.string().trim().min(1).max(120),
+});
 const outcomeTypes = ["work_completed", "issue_resolved", "risk_reduced", "routine_verification"] as const;
 const recommendationPriorities = ["low", "medium", "high"] as const;
 const maintenanceItemInputSchema = z.object({

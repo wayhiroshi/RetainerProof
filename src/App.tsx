@@ -86,6 +86,20 @@ type Report = {
   locale?: Locale;
 };
 
+type SearchPerformance = {
+  siteUrl: string;
+  lastSyncedAt: string | null;
+  keywords: Array<{
+    keyword: string;
+    clicks: number;
+    impressions: number;
+    ctr: number | null;
+    averagePosition: number | null;
+    previousAveragePosition: number | null;
+    positionChange: number | null;
+  }>;
+};
+
 type EditableReportSnapshot = {
   locale?: Locale;
   executiveSummary: string;
@@ -110,6 +124,7 @@ type EditableReportSnapshot = {
     completedCount: number;
     status: "completed" | "not_recorded" | "as_needed";
   }>;
+  searchPerformance?: SearchPerformance | null;
   workCompleted: Array<{
     category: string;
     summary: string;
@@ -172,6 +187,7 @@ type PublicReport = {
       completedCount: number;
       status: "completed" | "not_recorded" | "as_needed";
     }>;
+    searchPerformance: SearchPerformance | null;
     workCompleted: Array<{
       category: string;
       description: string;
@@ -601,6 +617,30 @@ function SampleReport({ locale = "en" }: { locale?: Locale }) {
         { name: "Backup readiness review", category: "backups", frequency: "monthly", completedCount: 1, status: "completed" },
         { name: "Forms and key-function review", category: "forms", frequency: "monthly", completedCount: 1, status: "completed" },
       ],
+      searchPerformance: {
+        siteUrl: "sc-domain:northpine.example",
+        lastSyncedAt: "2026-07-03T08:30:00.000Z",
+        keywords: [
+          {
+            keyword: "website care studio",
+            clicks: 92,
+            impressions: 1240,
+            ctr: 0.0742,
+            averagePosition: 6.8,
+            previousAveragePosition: 8.4,
+            positionChange: 1.6,
+          },
+          {
+            keyword: "web maintenance plan",
+            clicks: 31,
+            impressions: 690,
+            ctr: 0.0449,
+            averagePosition: 11.2,
+            previousAveragePosition: 12,
+            positionChange: 0.8,
+          },
+        ],
+      },
       workCompleted: locale === "ja" ? [
         { category: "セキュリティ", description: "定期的なセキュリティ更新を適用しました。", date: "2026-06-04", target: "メインサイト", outcomeType: "risk_reduced", resultSummary: "すべての更新が正常に完了しました。", verificationMethod: "公開ページと管理機能を確認", clientValue: "既知の脆弱性に対する露出を減らしました。" },
         { category: "パフォーマンス", description: "トップページの大きな画像を最適化しました。", date: "2026-06-12", target: "トップページ", outcomeType: "work_completed", resultSummary: "画像容量を削減しました。", verificationMethod: "公開ページをモバイルで確認", clientValue: "訪問者がページを閲覧しやすくなりました。" },
@@ -788,6 +828,7 @@ function AppShell() {
           <NavLink end to="/app"><Icon name="pulse" /> {tr(locale, "Overview", "概要")}</NavLink>
           <NavLink to="/app/clients"><Icon name="client" /> {tr(locale, "Clients", "クライアント")}</NavLink>
           <NavLink to="/app/activity"><Icon name="activity" /> {tr(locale, "Activity", "作業記録")}</NavLink>
+          <NavLink to="/app/search"><Icon name="pulse" /> {tr(locale, "Search", "検索分析")}</NavLink>
           <NavLink to="/app/reports"><Icon name="report" /> {tr(locale, "Reports", "レポート")}</NavLink>
         </nav>
         <div className="sidebar-bottom">
@@ -810,6 +851,7 @@ function AppShell() {
           <Route index element={<Dashboard me={me} />} />
           <Route path="clients" element={<ClientsPage />} />
           <Route path="activity" element={<ActivityPage />} />
+          <Route path="search" element={<SearchConsolePage />} />
           <Route path="reports" element={<ReportsPage />} />
           <Route path="billing" element={<BillingPage me={me} />} />
         </Routes>
@@ -1332,6 +1374,365 @@ function ActivityPage() {
   );
 }
 
+type SearchConsoleStatus = {
+  configured: boolean;
+  connection: {
+    connectedAt: string;
+    lastError: string | null;
+  } | null;
+  properties: Array<{
+    id: string;
+    clientId: string;
+    clientName: string;
+    siteUrl: string;
+    permissionLevel: string;
+    lastSyncedAt: string | null;
+    lastError: string | null;
+  }>;
+  keywords: Array<{
+    id: string;
+    clientId: string;
+    propertyId: string;
+    keyword: string;
+    enabled: boolean;
+  }>;
+};
+
+type SearchConsoleSite = {
+  siteUrl: string;
+  permissionLevel: string;
+};
+
+function SearchConsolePage() {
+  const locale = useUiLocale();
+  const location = useLocation();
+  const [status, setStatus] = useState<SearchConsoleStatus | null>(null);
+  const [clients, setClients] = useState<Client[]>([]);
+  const [sites, setSites] = useState<SearchConsoleSite[]>([]);
+  const [selectedClientId, setSelectedClientId] = useState("");
+  const [selectedSiteUrl, setSelectedSiteUrl] = useState("");
+  const [keywordInputs, setKeywordInputs] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+
+  const describeError = useCallback((caught: unknown) => {
+    const code = caught instanceof Error ? caught.message : "";
+    const messages: Record<string, string> = {
+      GOOGLE_REAUTH_REQUIRED: tr(locale, "Google access expired. Disconnect and connect again.", "Googleの認証が切れました。切断してから再接続してください。"),
+      SEARCH_CONSOLE_KEYWORD_EXISTS: tr(locale, "That search query is already tracked.", "その検索キーワードはすでに登録されています。"),
+      SEARCH_CONSOLE_KEYWORD_LIMIT_REACHED: tr(locale, "You can track up to 10 search queries per client.", "クライアントごとに最大10件まで登録できます。"),
+      SEARCH_CONSOLE_SITE_NOT_AVAILABLE: tr(locale, "That Search Console property is not available to this Google account.", "このGoogleアカウントでは、そのSearch Consoleプロパティを利用できません。"),
+      SEARCH_CONSOLE_NOT_CONFIGURED: tr(locale, "Google Search Console is not configured for this installation.", "この環境ではGoogle Search Consoleがまだ設定されていません。"),
+    };
+    return messages[code] ?? tr(locale, "Search Console could not complete that action.", "Search Consoleの操作を完了できませんでした。");
+  }, [locale]);
+
+  const load = useCallback(async () => {
+    setError("");
+    try {
+      const [nextStatus, clientResult] = await Promise.all([
+        api<SearchConsoleStatus>("/api/search-console"),
+        api<{ clients: Client[] }>("/api/clients"),
+      ]);
+      setStatus(nextStatus);
+      setClients(clientResult.clients);
+      setSelectedClientId((current) => current || clientResult.clients[0]?.id || "");
+      if (nextStatus.configured && nextStatus.connection) {
+        const siteResult = await api<{ sites: SearchConsoleSite[] }>("/api/search-console/sites");
+        const availableSites = siteResult.sites.filter((site) => site.permissionLevel !== "siteUnverifiedUser");
+        setSites(availableSites);
+        setSelectedSiteUrl((current) =>
+          availableSites.some((site) => site.siteUrl === current)
+            ? current
+            : availableSites[0]?.siteUrl ?? "",
+        );
+      } else {
+        setSites([]);
+      }
+    } catch (caught) {
+      setError(describeError(caught));
+    }
+  }, [describeError]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function connect() {
+    setBusy("connect");
+    setError("");
+    try {
+      const result = await api<{ url: string }>("/api/search-console/connect", { method: "POST" });
+      window.location.assign(result.url);
+    } catch (caught) {
+      setError(describeError(caught));
+      setBusy("");
+    }
+  }
+
+  async function assignProperty(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedClientId || !selectedSiteUrl) return;
+    setBusy("property");
+    setError("");
+    try {
+      await api("/api/search-console/properties", {
+        method: "POST",
+        body: JSON.stringify({ clientId: selectedClientId, siteUrl: selectedSiteUrl }),
+      });
+      await load();
+    } catch (caught) {
+      setError(describeError(caught));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function addKeyword(property: SearchConsoleStatus["properties"][number], event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const keyword = keywordInputs[property.id]?.trim() ?? "";
+    if (!keyword) return;
+    setBusy(`keyword-${property.id}`);
+    setError("");
+    try {
+      await api("/api/search-console/keywords", {
+        method: "POST",
+        body: JSON.stringify({
+          clientId: property.clientId,
+          propertyId: property.id,
+          keyword,
+        }),
+      });
+      setKeywordInputs((current) => ({ ...current, [property.id]: "" }));
+      await load();
+    } catch (caught) {
+      setError(describeError(caught));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function removeKeyword(keywordId: string) {
+    setBusy(`delete-keyword-${keywordId}`);
+    setError("");
+    try {
+      await api(`/api/search-console/keywords/${keywordId}`, { method: "DELETE" });
+      await load();
+    } catch (caught) {
+      setError(describeError(caught));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function sync(property: SearchConsoleStatus["properties"][number]) {
+    setBusy(`sync-${property.id}`);
+    setError("");
+    try {
+      await api("/api/search-console/sync", {
+        method: "POST",
+        body: JSON.stringify({ clientId: property.clientId }),
+      });
+      await load();
+    } catch (caught) {
+      setError(describeError(caught));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function removeProperty(propertyId: string) {
+    if (!window.confirm(tr(locale, "Stop tracking this client and delete its imported Search Console history?", "このクライアントの追跡を停止し、取り込んだSearch Console履歴を削除しますか？"))) return;
+    setBusy(`delete-property-${propertyId}`);
+    setError("");
+    try {
+      await api(`/api/search-console/properties/${propertyId}`, { method: "DELETE" });
+      await load();
+    } catch (caught) {
+      setError(describeError(caught));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function disconnect() {
+    if (!window.confirm(tr(locale, "Disconnect Google and delete the imported daily Search Console source data? Metrics already included in finalized report revisions remain part of those immutable reports until account deletion.", "Google連携を解除し、取り込んだ日次Search Console元データを削除しますか？確定済みレポートの版に含まれる指標は、変更不可のレポート記録としてアカウント削除まで残ります。"))) return;
+    setBusy("disconnect");
+    setError("");
+    try {
+      await api("/api/search-console/connection", { method: "DELETE" });
+      await load();
+    } catch (caught) {
+      setError(describeError(caught));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  const googleResult = new URLSearchParams(location.search).get("google");
+  const assignedClientIds = new Set(status?.properties.map((property) => property.clientId) ?? []);
+  const availableClients = clients.filter((client) => !assignedClientIds.has(client.id) || client.id === selectedClientId);
+  const dateLocale = locale === "ja" ? "ja-JP" : "en-US";
+
+  return (
+    <>
+      <PageHeader
+        kicker={tr(locale, "ORGANIC SEARCH EVIDENCE", "自然検索の実績")}
+        title={tr(locale, "Google Search Console", "Google Search Console")}
+      />
+      <div className="page-lead">
+        <p>{tr(locale, "Add factual search visibility trends to each monthly care report.", "月次保守レポートに、検索表示の事実に基づく推移を追加します。")}</p>
+        <span>{tr(locale, "Read-only access", "読み取り専用")}</span>
+      </div>
+
+      {googleResult && (
+        <div className={`search-console-banner ${googleResult === "connected" ? "success" : "error"}`} role="status">
+          {googleResult === "connected"
+            ? tr(locale, "Google Search Console connected.", "Google Search Consoleを接続しました。")
+            : googleResult === "denied"
+              ? tr(locale, "Google access was not granted. Nothing was connected.", "Googleへのアクセスは許可されませんでした。連携は行われていません。")
+              : tr(locale, "Google authorization could not be completed. Please try again.", "Google認証を完了できませんでした。もう一度お試しください。")}
+        </div>
+      )}
+      {error && <div className="form-error search-console-error">{error}</div>}
+
+      {!status ? (
+        <section className="panel full-panel"><div className="empty-state"><span><Icon name="pulse" /></span><h4>{tr(locale, "Loading Search Console", "Search Consoleを読み込み中")}</h4></div></section>
+      ) : !status.configured ? (
+        <section className="search-console-setup panel">
+          <div>
+            <span className="section-number">{tr(locale, "OWNER SETUP REQUIRED", "管理者による設定が必要")}</span>
+            <h2>{tr(locale, "Google OAuth credentials are not configured yet.", "Google OAuthの認証情報がまだ設定されていません。")}</h2>
+            <p>{tr(locale, "Enable the Search Console API, create a Web application OAuth client, and register this callback URL:", "Search Console APIを有効にし、Webアプリケーション用OAuthクライアントを作成して、次のコールバックURLを登録してください。")}</p>
+            <code>{window.location.origin}/api/search-console/callback</code>
+          </div>
+          <div className="info-box"><Icon name="lock" /><p>{tr(locale, "The integration requests only Google Search Console read access. No site editing, Analytics, Gmail, or Drive permissions are requested.", "Google Search Consoleの読み取り権限だけを要求します。サイト編集、Analytics、Gmail、Driveの権限は要求しません。")}</p></div>
+        </section>
+      ) : !status.connection ? (
+        <section className="search-console-connect panel">
+          <div className="search-console-google-mark">G</div>
+          <div>
+            <h2>{tr(locale, "Connect Google Search Console", "Google Search Consoleを接続")}</h2>
+            <p>{tr(locale, "Choose properties already available to your Google account, then track up to 10 exact search queries for each client.", "Googleアカウントで利用可能なプロパティを選び、クライアントごとに最大10件の完全一致キーワードを追跡できます。")}</p>
+          </div>
+          <button className="button" onClick={connect} disabled={busy === "connect"}>
+            {busy === "connect" ? tr(locale, "Opening Google…", "Googleを開いています…") : tr(locale, "Connect read-only access", "読み取り専用で接続")}
+          </button>
+        </section>
+      ) : (
+        <>
+          <section className="search-console-account panel">
+            <div>
+              <span className="status-good">{tr(locale, "Connected", "接続済み")}</span>
+              <h2>{tr(locale, "Search Console is ready", "Search Consoleを利用できます")}</h2>
+              <p>{tr(locale, "Connected", "接続日")} {new Date(status.connection.connectedAt).toLocaleString(dateLocale)}</p>
+            </div>
+            <button className="text-button danger" onClick={disconnect} disabled={busy === "disconnect"}>
+              {busy === "disconnect" ? tr(locale, "Disconnecting…", "解除中…") : tr(locale, "Disconnect Google", "Google連携を解除")}
+            </button>
+          </section>
+
+          <section className="search-console-assignment panel">
+            <div className="panel-head"><h3>{tr(locale, "Assign a Search Console property", "Search Consoleプロパティを割り当てる")}</h3></div>
+            <form className="stack-form" onSubmit={assignProperty}>
+              <div className="form-row">
+                <label>{tr(locale, "Client", "クライアント")}
+                  <select value={selectedClientId} onChange={(event) => setSelectedClientId(event.target.value)} required>
+                    {availableClients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}
+                  </select>
+                </label>
+                <label>{tr(locale, "Search Console property", "Search Consoleプロパティ")}
+                  <select value={selectedSiteUrl} onChange={(event) => setSelectedSiteUrl(event.target.value)} required>
+                    {sites.map((site) => <option key={site.siteUrl} value={site.siteUrl}>{site.siteUrl}</option>)}
+                  </select>
+                </label>
+              </div>
+              {!clients.length && <p className="field-help">{tr(locale, "Add a client before assigning a property.", "プロパティを割り当てる前にクライアントを追加してください。")}</p>}
+              {!sites.length && <p className="field-help">{tr(locale, "No verified Search Console properties were found for this Google account.", "このGoogleアカウントで確認済みのSearch Consoleプロパティが見つかりませんでした。")}</p>}
+              <button className="button button-small search-console-submit" disabled={!clients.length || !sites.length || busy === "property"}>
+                {busy === "property" ? tr(locale, "Saving…", "保存中…") : tr(locale, "Assign property", "プロパティを割り当てる")}
+              </button>
+            </form>
+          </section>
+
+          <section className="search-console-property-list">
+            {status.properties.map((property) => {
+              const keywords = status.keywords.filter((keyword) => keyword.propertyId === property.id && keyword.enabled);
+              return (
+                <article className="search-console-property panel" key={property.id}>
+                  <header>
+                    <div>
+                      <span className="section-number">{property.clientName}</span>
+                      <h2>{property.siteUrl}</h2>
+                      <p>
+                        {property.lastSyncedAt
+                          ? tr(locale, `Last synced ${new Date(property.lastSyncedAt).toLocaleString(dateLocale)}`, `最終同期 ${new Date(property.lastSyncedAt).toLocaleString(dateLocale)}`)
+                          : tr(locale, "Not synced yet", "まだ同期していません")}
+                      </p>
+                    </div>
+                    <button className="button button-small" onClick={() => sync(property)} disabled={!keywords.length || busy === `sync-${property.id}`}>
+                      {busy === `sync-${property.id}` ? tr(locale, "Syncing…", "同期中…") : tr(locale, "Sync now", "今すぐ同期")}
+                    </button>
+                  </header>
+                  {property.lastError && <div className="form-error">{tr(locale, "The last sync failed. Reconnect Google if the problem continues.", "前回の同期に失敗しました。続く場合はGoogleへ再接続してください。")}</div>}
+                  <div className="search-keywords">
+                    <div className="search-keyword-heading">
+                      <h3>{tr(locale, "Tracked search queries", "追跡する検索キーワード")}</h3>
+                      <span>{keywords.length} / 10</span>
+                    </div>
+                    {keywords.length > 0 ? (
+                      <ul>
+                        {keywords.map((keyword) => (
+                          <li key={keyword.id}>
+                            <span>{keyword.keyword}</span>
+                            <button
+                              className="text-button danger"
+                              type="button"
+                              disabled={busy === `delete-keyword-${keyword.id}`}
+                              onClick={() => removeKeyword(keyword.id)}
+                            >{tr(locale, "Remove", "削除")}</button>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : <p className="field-help">{tr(locale, "Add the exact search query your client wants to follow.", "クライアントが追跡したい検索キーワードを完全一致で追加してください。")}</p>}
+                    <form className="search-keyword-add" onSubmit={(event) => addKeyword(property, event)}>
+                      <input
+                        aria-label={tr(locale, "Search query", "検索キーワード")}
+                        maxLength={120}
+                        placeholder={tr(locale, "Example: web maintenance service", "例：ホームページ 保守 大阪")}
+                        value={keywordInputs[property.id] ?? ""}
+                        onChange={(event) => setKeywordInputs((current) => ({ ...current, [property.id]: event.target.value }))}
+                      />
+                      <button className="button button-small" disabled={keywords.length >= 10 || busy === `keyword-${property.id}`}>
+                        <Icon name="plus" /> {tr(locale, "Add query", "追加")}
+                      </button>
+                    </form>
+                  </div>
+                  <footer>
+                    <p>{tr(locale, "Reports show period-average position, clicks, impressions, and CTR. This is not a live or guaranteed ranking.", "レポートには期間中の平均掲載順位、クリック数、表示回数、CTRを掲載します。リアルタイムまたは保証された順位ではありません。")}</p>
+                    <button className="text-button danger" onClick={() => removeProperty(property.id)} disabled={busy === `delete-property-${property.id}`}>
+                      {tr(locale, "Stop tracking this client", "このクライアントの追跡を停止")}
+                    </button>
+                  </footer>
+                </article>
+              );
+            })}
+          </section>
+
+          <section className="search-console-privacy">
+            <Icon name="lock" />
+            <div>
+              <h3>{tr(locale, "What RetainerProof stores", "RetainerProofが保存するもの")}</h3>
+              <p>{tr(locale, "An encrypted refresh token, selected properties and queries, and daily aggregate Search Console metrics. This data is used only for your reports and is never sent to AI. Disconnecting revokes access and deletes imported daily source data; metrics already included in immutable finalized report revisions remain until account deletion.", "暗号化した更新トークン、選択したプロパティと検索キーワード、日次のSearch Console集計値です。レポート作成だけに利用し、AIへは送信しません。連携解除時にアクセスを取り消し、日次の元データを削除します。変更不可の確定済みレポート版に含まれる指標は、アカウント削除まで残ります。")}</p>
+              <Link to="/privacy">{tr(locale, "Read the Privacy Policy", "プライバシーポリシーを確認")} →</Link>
+            </div>
+          </section>
+        </>
+      )}
+    </>
+  );
+}
+
 function ReportsPage() {
   const locale = useUiLocale();
   const [clients, setClients] = useState<Client[]>([]);
@@ -1803,6 +2204,51 @@ function PublicReportView({ report, sample = false }: { report: PublicReport; sa
               </table>
             </div>
           )}
+          {report.snapshot.searchPerformance && report.snapshot.searchPerformance.keywords.length > 0 && (
+            <div className="report-search-performance">
+              <div className="report-search-heading">
+                <div>
+                  <small>{tr(locale, "GOOGLE SEARCH VISIBILITY", "GOOGLE検索での表示状況")}</small>
+                  <h3>{tr(locale, "How selected searches performed", "設定した検索キーワードの実績")}</h3>
+                  <p>{report.snapshot.searchPerformance.siteUrl}</p>
+                </div>
+                {report.snapshot.searchPerformance.lastSyncedAt && (
+                  <span>{tr(locale, "Data synced", "データ同期")} {new Date(report.snapshot.searchPerformance.lastSyncedAt).toLocaleDateString(dateLocale)}</span>
+                )}
+              </div>
+              <div className="report-search-grid">
+                {report.snapshot.searchPerformance.keywords.map((keyword) => {
+                  const change = keyword.positionChange;
+                  const changeLabel = change === null
+                    ? "—"
+                    : Math.abs(change) < 0.05
+                      ? tr(locale, "No change", "変化なし")
+                      : change > 0
+                        ? `↑ ${change.toFixed(1)}`
+                        : `↓ ${Math.abs(change).toFixed(1)}`;
+                  return (
+                    <article key={keyword.keyword}>
+                      <header>
+                        <h4>{keyword.keyword}</h4>
+                        <span className={change === null || Math.abs(change) < 0.05 ? "neutral" : change > 0 ? "improved" : "declined"}>
+                          {changeLabel}
+                        </span>
+                      </header>
+                      <div>
+                        <p><small>{tr(locale, "AVERAGE POSITION", "平均掲載順位")}</small><strong>{keyword.averagePosition === null ? "—" : keyword.averagePosition.toFixed(1)}</strong></p>
+                        <p><small>{tr(locale, "IMPRESSIONS", "表示回数")}</small><strong>{keyword.impressions.toLocaleString(dateLocale)}</strong></p>
+                        <p><small>{tr(locale, "CLICKS", "クリック")}</small><strong>{keyword.clicks.toLocaleString(dateLocale)}</strong></p>
+                        <p><small>CTR</small><strong>{keyword.ctr === null ? "—" : `${(keyword.ctr * 100).toFixed(1)}%`}</strong></p>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+              <p className="report-search-note">
+                {tr(locale, "Average position is calculated from Google Search Console impressions during this report period and compared with the preceding period. It is not a live, universal, or guaranteed ranking.", "平均掲載順位は、このレポート期間中のGoogle Search Consoleの表示回数に基づき、直前の同期間と比較した値です。リアルタイム、すべての利用者共通、または保証された順位ではありません。")}
+              </p>
+            </div>
+          )}
         </section>
 
         <section className="report-work">
@@ -1906,10 +2352,11 @@ const legalCopy = {
   privacy: {
     label: "PRIVACY POLICY",
     title: "Collect less. Explain what moves.",
-    updated: "Draft updated July 24, 2026",
+    updated: "Draft updated July 30, 2026",
     sections: [
       ["Data we process", "We process account email, workspace and client labels, public website URLs, maintenance records, monitoring observations, report content, delivery status, and billing identifiers. We do not need website administrator credentials."],
       ["AI rewriting", "AI is used only when you press Rewrite for client. We send the selected work description and minimal category context to Cloudflare Workers AI. We do not send internal notes, credentials, client email addresses, or unrelated account data. You approve the result before saving."],
+      ["Google Search Console", "If you connect Google Search Console, we request read-only access. We store an encrypted refresh token, the properties and search queries you select, and daily aggregate clicks, impressions, click-through rate, and average position for report preparation. Search Console data is not sent to AI. Disconnecting revokes Google access and deletes the imported daily source data. Metrics already included in immutable finalized report revisions remain part of those reports until account deletion."],
       ["Sharing and measurement", "Client reports use revocable, unguessable links. We record the first report view without a tracking pixel. Payment information is handled by Stripe and Link; we retain billing identifiers and event status rather than full card details."],
       ["Retention and deletion", "After account closure, customer content is scheduled for deletion within 30 days except records required for billing, fraud prevention, disputes, or law. Backups and exports expire on their own operational schedule."],
       ["Contact", `Request access, correction, export, or deletion at ${brand.supportEmail}. This policy must be completed with the legal entity, subprocessors, international transfer terms, and jurisdiction-specific disclosures before launch.`],

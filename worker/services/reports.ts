@@ -13,6 +13,10 @@ import {
 import { escapeHtml } from "../lib/email";
 import { localized, normalizeLocale, type Locale } from "../lib/locale";
 import { reportPeriodLabel } from "../lib/report-period";
+import {
+  buildSearchPerformanceSnapshot,
+  type SearchPerformanceSnapshot,
+} from "./search-console";
 
 export interface ReportSnapshot {
   locale?: Locale;
@@ -41,6 +45,7 @@ export interface ReportSnapshot {
     completedCount: number;
     status: "completed" | "not_recorded" | "as_needed";
   }>;
+  searchPerformance?: SearchPerformanceSnapshot | null;
   workCompleted: Array<{
     category: string;
     summary: string;
@@ -182,6 +187,14 @@ export async function buildReportSnapshot(
   const completedMaintenance = maintenanceCoverage.filter((item) => item.status === "completed").length;
   const locale = normalizeLocale(client.reportLocale);
   const label = reportPeriodLabel(periodStart, workspace.timezone, locale);
+  const searchPerformance = await buildSearchPerformanceSnapshot(env, {
+    workspaceId,
+    clientId,
+    periodStart,
+    periodEnd,
+    timeZone: workspace.timezone,
+  });
+  const trackedKeywordCount = searchPerformance?.keywords.length ?? 0;
   const plannedMaintenanceNames = maintenanceCoverage.slice(0, 3).map((item) => item.name);
   const additionalPlannedCount = Math.max(maintenanceCoverage.length - plannedMaintenanceNames.length, 0);
   const plannedMaintenanceLabel = plannedMaintenanceNames.join(locale === "ja" ? "、" : ", ");
@@ -203,7 +216,7 @@ export async function buildReportSnapshot(
             : ""
         }. ${finalRuns.length ? `${passed} of ${finalRuns.length} scheduled public checks passed.` : "No scheduled public checks were recorded."}${
           healthStatus === "Needs attention" ? " One or more observations need attention." : ""
-        }`,
+        }${trackedKeywordCount ? ` Finalized Search Console data was included for ${trackedKeywordCount} tracked ${trackedKeywordCount === 1 ? "keyword" : "keywords"}.` : ""}`,
       ja:
         `${label}は、${workspace.name}がお客様向けの定期保守作業を${visible.length}件記録しました。${
           maintenanceCoverage.length
@@ -211,7 +224,7 @@ export async function buildReportSnapshot(
             : ""
         }${finalRuns.length ? `公開サイトの定期確認は${finalRuns.length}回中${passed}回成功しました。` : "公開サイトの定期確認記録はありません。"}${
           healthStatus === "Needs attention" ? "確認が必要な観測結果があります。" : ""
-        }`,
+        }${trackedKeywordCount ? `Search Consoleの確定データを追跡キーワード${trackedKeywordCount}件について掲載しています。` : ""}`,
     }),
     currentHealth: {
       passed,
@@ -221,6 +234,7 @@ export async function buildReportSnapshot(
       targets,
     },
     maintenanceCoverage,
+    searchPerformance,
     workCompleted: visible.map((row) => ({
       category: row.category,
       summary: row.clientSummary,
@@ -341,12 +355,21 @@ export function renderReportHtml(snapshot: ReportSnapshot): string {
   const careUnit = copy.careUnit(snapshot.workCompleted.length);
   const targets = snapshot.currentHealth.targets ?? [];
   const maintenanceCoverage = snapshot.maintenanceCoverage ?? [];
+  const searchPerformance = snapshot.searchPerformance ?? null;
   const nextMonthPlan = snapshot.nextMonthPlan ?? copy.defaultNextMonth;
   const frequencyLabel = (value: string) => copy.frequency[value as keyof typeof copy.frequency] ?? value;
   const outcomeLabel = (value?: string) =>
     copy.outcomes[(value ?? "work_completed") as keyof typeof copy.outcomes] ?? copy.outcomes.work_completed;
   const priorityLabel = (value?: string) =>
     copy.priorities[(value ?? "medium") as keyof typeof copy.priorities] ?? copy.priorities.medium;
+  const positionChangeLabel = (value: number | null) => {
+    if (value === null) return { className: "", label: "—" };
+    if (Math.abs(value) < 0.05) return { className: "position-neutral", label: copy.noPositionChange };
+    return {
+      className: value > 0 ? "position-up" : "position-down",
+      label: `${value > 0 ? "↑" : "↓"} ${Math.abs(value).toFixed(1)}`,
+    };
+  };
   return `<!doctype html>
 <html lang="${locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
@@ -393,6 +416,7 @@ h1{max-width:6.8in;margin:0 0 14px;font-family:Georgia,"Times New Roman",serif;f
 .evidence-table th,.coverage-table th{color:#607a6f;font-size:5.5px;letter-spacing:.7px;text-transform:uppercase}
 .evidence-table td:first-child{max-width:2.6in;word-break:break-all}.evidence-table td:last-child,.coverage-table td:last-child{text-align:right}
 .coverage-status{font-weight:700;color:#426d5c}.coverage-status.not-recorded{color:#96624f}.coverage-status.as-needed{color:#7b8983}
+.search-performance{margin:.32in 0 .4in;padding:.28in .3in;background:#edf3ed;break-inside:avoid}.search-performance h2{margin:0;font-family:Georgia,serif;font-size:15px;font-weight:400}.search-performance>p{margin:7px 0 .18in;color:#71827a;font-size:6.5px;line-height:1.5}.search-table{width:100%;border-collapse:collapse;font-size:6.5px}.search-table th,.search-table td{padding:7px 5px;border-top:1px solid #d5ded7;text-align:right}.search-table th:first-child,.search-table td:first-child{text-align:left}.search-table th{color:#607a6f;font-size:5.5px;letter-spacing:.7px;text-transform:uppercase}.position-up{color:#2f7258;font-weight:700}.position-down{color:#9a5b47;font-weight:700}.position-neutral{color:#687a72;font-weight:700}
 .work{break-inside:auto}
 .work-list{margin:.21in 0 0 1.55in}
 .work-item{min-height:.52in;display:grid;grid-template-columns:.34in 1fr .55in;gap:.14in;align-items:center;padding:.1in 0;border-top:1px solid #e2dfd6;break-inside:avoid}
@@ -406,7 +430,7 @@ h1{max-width:6.8in;margin:0 0 14px;font-family:Georgia,"Times New Roman",serif;f
 .insight ul{margin:.18in 0 0;padding:0;list-style:none}.insight li{display:grid;grid-template-columns:20px 1fr;gap:8px;padding:7px 0;border-top:1px solid #d8d7cf;break-inside:avoid}.recommendations li{border-color:rgba(255,255,255,.2)}
 .list-icon{width:18px;height:18px;display:grid;place-items:center;border-radius:50%;color:#426d5c;background:#dce8dd;font-size:8px}.recommendations .list-icon{color:#fff;background:rgba(255,255,255,.14)}
 .insight li p{margin:2px 0 0;font-size:7px;line-height:1.45}.empty{color:#7e8d87;font-size:7px}.recommendations .empty{color:#eed8cf}
-.closing{position:relative;min-height:4in;overflow:hidden;margin-top:.35in;padding:.6in .65in;display:flex;flex-direction:column;justify-content:center;text-align:center;background:#e2ece2;break-inside:avoid}
+.closing{position:relative;min-height:3in;overflow:hidden;margin-top:.35in;padding:.5in .65in;display:flex;flex-direction:column;justify-content:center;text-align:center;background:#e2ece2;break-inside:avoid}
 .closing:before{content:"RP";position:absolute;left:50%;top:-.08in;color:rgba(31,80,65,.055);font-family:Georgia,serif;font-size:86px;transform:translateX(-50%)}
 .closing small,.closing h2{position:relative}.closing small{color:#5e796d}.closing h2{max-width:6.3in;margin:.13in auto 0;font-family:Georgia,serif;font-size:17px;font-weight:400;line-height:1.4}
 .next-month{margin-top:.35in;padding:.38in .45in;background:#173f36;color:#fff;break-inside:avoid}.next-month small{font-size:6px;font-weight:700;letter-spacing:1.3px;color:#9fc1b2}.next-month h2{margin:.12in 0 0;font-family:Georgia,serif;font-size:15px;font-weight:400;line-height:1.45}
@@ -432,6 +456,10 @@ footer{min-height:.95in;display:flex;justify-content:space-between;align-items:c
   <p class="evidence-note">${copy.evidenceNote}</p>
   ${targets.length ? `<table class="evidence-table"><thead><tr><th>${copy.target}</th><th>${copy.observations}</th><th>${copy.response}</th><th>${copy.ssl}</th></tr></thead><tbody>${targets.map((item) => `<tr><td>${escapeHtml(item.target)}</td><td>${item.passed} / ${item.total}</td><td>${item.averageResponseMs === null ? "—" : `${item.averageResponseMs} ms`}</td><td>${item.tlsExpiresAt ? escapeHtml(new Date(item.tlsExpiresAt).toLocaleDateString(locale === "ja" ? "ja-JP" : "en-US", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" })) : copy.sslVerifiedOnly}</td></tr>`).join("")}</tbody></table>` : ""}
   ${maintenanceCoverage.length ? `<table class="coverage-table"><thead><tr><th>${copy.careItem}</th><th>${copy.frequencyLabel}</th><th>${copy.recorded}</th><th>${copy.coverageStatus}</th></tr></thead><tbody>${maintenanceCoverage.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(frequencyLabel(item.frequency))}</td><td>${item.completedCount}</td><td><span class="coverage-status ${item.status.replace("_", "-")}">${copy.coverage[item.status]}</span></td></tr>`).join("")}</tbody></table>` : ""}
+  ${searchPerformance ? `<section class="search-performance"><h2>${copy.searchVisibility}</h2><p>${copy.searchNote} ${copy.searchProperty}: ${escapeHtml(searchPerformance.siteUrl)}</p>${searchPerformance.keywords.length ? `<table class="search-table"><thead><tr><th>${copy.keyword}</th><th>${copy.averagePosition}</th><th>${copy.change}</th><th>${copy.impressions}</th><th>${copy.clicks}</th><th>${copy.ctr}</th></tr></thead><tbody>${searchPerformance.keywords.map((item) => {
+    const change = positionChangeLabel(item.positionChange);
+    return `<tr><td>${escapeHtml(item.keyword)}</td><td>${item.averagePosition === null ? "—" : item.averagePosition.toFixed(1)}</td><td class="${change.className}">${change.label}</td><td>${Math.round(item.impressions)}</td><td>${Math.round(item.clicks)}</td><td>${item.ctr === null ? "—" : `${(item.ctr * 100).toFixed(1)}%`}</td></tr>`;
+  }).join("")}</tbody></table>` : `<p>${copy.noKeywordData}</p>`}</section>` : ""}
   <section class="work">
     <div class="section-heading"><span>02</span><div><small>${copy.workCompleted}</small><p>${copy.careBehind}</p></div></div>
     <div class="work-list">${snapshot.workCompleted.length
@@ -475,6 +503,17 @@ const reportCopy = {
     result: "Result",
     verification: "Verified by",
     clientValue: "Client value",
+    searchVisibility: "GOOGLE SEARCH VISIBILITY",
+    searchNote: "Average position is calculated from Search Console impressions for this period; it is not a live or guaranteed rank.",
+    searchProperty: "Property",
+    keyword: "Tracked keyword",
+    averagePosition: "Avg. position",
+    change: "vs prior period",
+    noPositionChange: "No change",
+    impressions: "Impressions",
+    clicks: "Clicks",
+    ctr: "CTR",
+    noKeywordData: "No tracked keyword data was returned for this period.",
     workCompleted: "WORK COMPLETED",
     careBehind: "The care behind the result",
     noWork: "No client-visible maintenance activities were recorded in this period.",
@@ -544,6 +583,17 @@ const reportCopy = {
     result: "結果",
     verification: "確認方法",
     clientValue: "お客様への価値",
+    searchVisibility: "Google検索での表示状況",
+    searchNote: "平均掲載順位は、この期間にSearch Consoleへ記録された表示回数から算出した値です。リアルタイム順位や固定順位ではありません。",
+    searchProperty: "プロパティ",
+    keyword: "追跡キーワード",
+    averagePosition: "平均掲載順位",
+    change: "前期間比",
+    noPositionChange: "変化なし",
+    impressions: "表示回数",
+    clicks: "クリック",
+    ctr: "クリック率",
+    noKeywordData: "この期間に追跡キーワードのデータは返されませんでした。",
     workCompleted: "完了した作業",
     careBehind: "結果を支える保守内容",
     noWork: "この期間にお客様向けの保守作業記録はありません。",

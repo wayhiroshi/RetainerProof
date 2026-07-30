@@ -36,6 +36,47 @@ npx wrangler secret put STRIPE_SECRET_KEY --env production
 npx wrangler secret put STRIPE_WEBHOOK_SECRET --env production
 ```
 
+## Google Search Console
+
+Use a dedicated Google Cloud project for RetainerProof:
+
+1. Enable the Google Search Console API.
+2. Configure the Google Auth Platform branding and data-access screens.
+3. Use `https://retainerproof.aether42.com` as the application home page and `https://retainerproof.aether42.com/privacy` as the privacy-policy URL. The authorized domain is `aether42.com`.
+4. Request only `https://www.googleapis.com/auth/webmasters.readonly`.
+5. Create an OAuth client with application type **Web application**.
+6. Add this exact authorized redirect URI:
+
+   ```text
+   https://retainerproof.aether42.com/api/search-console/callback
+   ```
+
+7. While the consent configuration is in Testing, add the owner account as a test user. Complete the required Google verification before making the integration generally available.
+8. Store the client values through Wrangler prompts. Do not put either value in a file:
+
+   ```sh
+   npx wrangler secret put GOOGLE_CLIENT_ID --env production
+   npx wrangler secret put GOOGLE_CLIENT_SECRET --env production
+   ```
+
+9. Generate a RetainerProof-only 32-byte AES key and pipe it directly to Wrangler:
+
+   ```sh
+   openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n' | npx wrangler secret put GOOGLE_TOKEN_ENCRYPTION_KEY --env production
+   ```
+
+The Worker never stores a Google access token. It encrypts the refresh token with AES-256-GCM, requests short-lived access tokens only when needed, and deletes imported Search Console rows when the user disconnects. The daily queue sync fetches up to 90 finalized days for no more than 10 exact queries per client. Reports present Search Console’s impression-weighted **average position**, not a live or guaranteed rank.
+
+Before release, verify:
+
+- Connect and deny paths both return safely to `/app/search`.
+- Only properties visible to the connected Google account can be assigned.
+- A second workspace cannot read, change, or sync the first workspace’s property or queries.
+- Manual sync imports clicks, impressions, CTR, and average position without logging tokens or query data.
+- The next finalized English and Japanese report includes the selected query data and period comparison.
+- Disconnect revokes the Google token and cascades imported properties, queries, and daily metrics.
+- The consent screen’s home page and privacy-policy links are public and use the same verified domain.
+
 ## Transactional email without Workers Paid
 
 RetainerProof sends transactional mail by calling the Resend REST API from the Worker. It does not use Cloudflare Email Sending or its paid-plan binding.
@@ -67,7 +108,7 @@ Add the Stripe price IDs for Starter monthly/yearly and Freelancer monthly/yearl
 1. Connect `wayhiroshi/RetainerProof` to the `retainerproof-production` Worker.
 2. Deploy to the Workers preview URL and confirm all four named resources exist.
 3. Apply the D1 migrations with `npx wrangler d1 migrations apply retainerproof-production --remote --env production`.
-4. Run registration → Magic Link → client → activity → monitoring → AI rewrite → report → PDF → delivery → checkout → cancellation.
+4. Run registration → Magic Link → client → activity → monitoring → Search Console sync → AI rewrite → report → PDF → delivery → checkout → cancellation.
 5. Test a second workspace against every first-workspace identifier.
 6. Verify desktop, 390px mobile, and print output.
 7. Onboard the three founding customers manually.

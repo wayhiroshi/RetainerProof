@@ -34,6 +34,14 @@ const englishSnapshot: ReportSnapshot = {
     { name: "Security review", category: "security", frequency: "monthly", completedCount: 1, status: "completed" },
     { name: "Forms and key functions", category: "forms", frequency: "monthly", completedCount: 1, status: "completed" },
   ],
+  searchPerformance: {
+    siteUrl: "sc-domain:northpine.example",
+    lastSyncedAt: "2026-07-03T08:30:00.000Z",
+    keywords: [
+      { keyword: "website care studio", clicks: 92, impressions: 1240, ctr: 0.0742, averagePosition: 6.8, previousAveragePosition: 8.4, positionChange: 1.6 },
+      { keyword: "web maintenance plan", clicks: 31, impressions: 690, ctr: 0.0449, averagePosition: 11.2, previousAveragePosition: 12, positionChange: 0.8 },
+    ],
+  },
   workCompleted: [
     {
       category: "security",

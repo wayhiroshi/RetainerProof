@@ -14,6 +14,12 @@ test("one workspace cannot read or write another workspace data", async ({ brows
   const clientB = `client-b-${suffix}`;
   const reportB = `report-b-${suffix}`;
   const reportA = `report-a-${suffix}`;
+  const searchConnectionA = `search-connection-a-${suffix}`;
+  const searchConnectionB = `search-connection-b-${suffix}`;
+  const searchPropertyA = `search-property-a-${suffix}`;
+  const searchPropertyB = `search-property-b-${suffix}`;
+  const searchKeywordA = `search-keyword-a-${suffix}`;
+  const searchKeywordB = `search-keyword-b-${suffix}`;
   const shareTokenA = `share-a-${suffix}`;
   const shareTokenHashA = createHash("sha256").update(shareTokenA).digest("base64url");
   const magicTokenA = `magic-a-${suffix}`;
@@ -53,6 +59,27 @@ test("one workspace cannot read or write another workspace data", async ({ brows
     INSERT INTO clients (id,workspace_id,name,status,created_at,updated_at) VALUES
       ('${clientA}','${workspaceA}','Visible Client','active',${now},${now}),
       ('${clientB}','${workspaceB}','Hidden Client','active',${now},${now});
+    INSERT INTO search_console_connections
+      (id,workspace_id,connected_by_user_id,encrypted_refresh_token,scope,connected_at,created_at,updated_at)
+      VALUES
+      ('${searchConnectionA}','${workspaceA}','${userA}','test-ciphertext-a','https://www.googleapis.com/auth/webmasters.readonly',${now},${now},${now}),
+      ('${searchConnectionB}','${workspaceB}','${userB}','test-ciphertext-b','https://www.googleapis.com/auth/webmasters.readonly',${now},${now},${now});
+    INSERT INTO search_console_properties
+      (id,workspace_id,connection_id,client_id,site_url,permission_level,last_synced_at,created_at,updated_at)
+      VALUES
+      ('${searchPropertyA}','${workspaceA}','${searchConnectionA}','${clientA}','sc-domain:visible.example','siteOwner',${now},${now},${now}),
+      ('${searchPropertyB}','${workspaceB}','${searchConnectionB}','${clientB}','sc-domain:hidden.example','siteOwner',${now},${now},${now});
+    INSERT INTO search_console_keywords
+      (id,workspace_id,client_id,property_id,keyword,normalized_keyword,enabled,created_at,updated_at)
+      VALUES
+      ('${searchKeywordA}','${workspaceA}','${clientA}','${searchPropertyA}','website care','website care',1,${now},${now}),
+      ('${searchKeywordB}','${workspaceB}','${clientB}','${searchPropertyB}','hidden query','hidden query',1,${now},${now});
+    INSERT INTO search_console_daily_metrics
+      (id,workspace_id,keyword_id,metric_date,clicks,impressions,ctr,position,fetched_at)
+      VALUES
+      ('${randomUUID()}','${workspaceA}','${searchKeywordA}','2025-12-15',5,80,0.0625,8.0,${now}),
+      ('${randomUUID()}','${workspaceA}','${searchKeywordA}','2026-01-15',10,100,0.1,6.0,${now}),
+      ('${randomUUID()}','${workspaceB}','${searchKeywordB}','2026-01-15',999,9999,0.1,1.0,${now});
     INSERT INTO reports (id,workspace_id,client_id,period_start,period_end,status,current_revision,created_at,updated_at)
       VALUES
       ('${reportB}','${workspaceB}','${clientB}',${now - 86400},${now},'draft',1,${now},${now}),
@@ -145,6 +172,32 @@ test("one workspace cannot read or write another workspace data", async ({ brows
   expect(localizedClients.clients).toEqual([
     expect.objectContaining({ id: clientA, reportLocale: "ja" }),
   ]);
+  const searchConsoleResponse = await request.get(`${baseURL}/api/search-console`);
+  expect(searchConsoleResponse.status()).toBe(200);
+  const searchConsolePayload = (await searchConsoleResponse.json()) as {
+    properties: Array<{ id: string; siteUrl: string }>;
+    keywords: Array<{ id: string; keyword: string }>;
+  };
+  expect(searchConsolePayload.properties).toEqual([
+    expect.objectContaining({ id: searchPropertyA, siteUrl: "sc-domain:visible.example" }),
+  ]);
+  expect(searchConsolePayload.keywords).toEqual([
+    expect.objectContaining({ id: searchKeywordA, keyword: "website care" }),
+  ]);
+  expect((await request.delete(`${baseURL}/api/search-console/properties/${searchPropertyB}`, {
+    headers: localeHeaders,
+  })).status()).toBe(404);
+  expect((await request.delete(`${baseURL}/api/search-console/keywords/${searchKeywordB}`, {
+    headers: localeHeaders,
+  })).status()).toBe(404);
+  expect((await request.post(`${baseURL}/api/search-console/keywords`, {
+    data: { clientId: clientA, propertyId: searchPropertyB, keyword: "must not be stored" },
+    headers: localeHeaders,
+  })).status()).toBe(404);
+  expect((await request.post(`${baseURL}/api/search-console/keywords`, {
+    data: { clientId: clientA, propertyId: searchPropertyA, keyword: "  WEBSITE   CARE  " },
+    headers: localeHeaders,
+  })).status()).toBe(409);
 
   const careItemResponse = await request.post(`${baseURL}/api/clients/${clientA}/maintenance-items`, {
     data: {
@@ -200,6 +253,17 @@ test("one workspace cannot read or write another workspace data", async ({ brows
       period: { label: string };
       executiveSummary: string;
       maintenanceCoverage: Array<{ name: string; status: string; completedCount: number }>;
+      searchPerformance: {
+        siteUrl: string;
+        keywords: Array<{
+          keyword: string;
+          clicks: number;
+          impressions: number;
+          averagePosition: number | null;
+          previousAveragePosition: number | null;
+          positionChange: number | null;
+        }>;
+      };
       workCompleted: Array<{
         outcomeType: string;
         resultSummary: string;
@@ -217,6 +281,20 @@ test("one workspace cannot read or write another workspace data", async ({ brows
   expect(japaneseDraft.snapshot.maintenanceCoverage).toEqual([
     expect.objectContaining({ name: "月次セキュリティ確認", status: "completed", completedCount: 1 }),
   ]);
+  expect(japaneseDraft.snapshot.searchPerformance).toEqual({
+    siteUrl: "sc-domain:visible.example",
+    lastSyncedAt: expect.any(String),
+    keywords: [
+      expect.objectContaining({
+        keyword: "website care",
+        clicks: 10,
+        impressions: 100,
+        averagePosition: 6,
+        previousAveragePosition: 8,
+        positionChange: 2,
+      }),
+    ],
+  });
   expect(japaneseDraft.snapshot.workCompleted).toEqual([
     expect.objectContaining({
       outcomeType: "risk_reduced",

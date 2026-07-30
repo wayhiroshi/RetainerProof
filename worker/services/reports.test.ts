@@ -36,6 +36,21 @@ const snapshot: ReportSnapshot = {
       status: "completed",
     },
   ],
+  searchPerformance: {
+    siteUrl: "sc-domain:example.com",
+    lastSyncedAt: "2026-07-03T08:30:00.000Z",
+    keywords: [
+      {
+        keyword: "website care",
+        clicks: 92,
+        impressions: 1240,
+        ctr: 0.0742,
+        averagePosition: 6.8,
+        previousAveragePosition: 8.4,
+        positionChange: 1.6,
+      },
+    ],
+  },
   workCompleted: [
     {
       category: "security",
@@ -68,6 +83,11 @@ describe("renderReportHtml", () => {
     expect(html).toContain("CARE COMPLETED");
     expect(html).toContain("OUTCOMES & VERIFICATION");
     expect(html).toContain("Security review");
+    expect(html).toContain("GOOGLE SEARCH VISIBILITY");
+    expect(html).toContain("website care");
+    expect(html).toContain("6.8");
+    expect(html).toContain("7.4%");
+    expect(html).toContain("not a live or guaranteed rank");
     expect(html).toContain("Sep 28, 2026");
     expect(html).toContain("Reduced exposure to known vulnerabilities.");
     expect(html).toContain("Share candidate images.");
@@ -97,6 +117,8 @@ describe("renderReportHtml", () => {
     expect(html).toContain("WEBサイト保守 / 月次レポート");
     expect(html).toContain("30回中30回の定期確認に成功");
     expect(html).toContain("セキュリティ");
+    expect(html).toContain("Google検索での表示状況");
+    expect(html).toContain("リアルタイム順位や固定順位ではありません");
     expect(html).toContain("稼働率の推定や可用性の保証を行うものではありません");
     expect(html).not.toContain("100% uptime");
   });

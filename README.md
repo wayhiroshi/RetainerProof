@@ -44,7 +44,11 @@ Before production deployment:
 6. Create the production D1, R2 buckets, queues, and dead-letter queue.
 7. Use the existing Resend-verified `notify.aether42.com` sending domain and keep its SPF, DKIM, and return-path DNS records intact.
 8. Create a RetainerProof-only Resend key with sending access restricted to `notify.aether42.com`, then store `RESEND_API_KEY`, `BETTER_AUTH_SECRET`, `STRIPE_SECRET_KEY`, and `STRIPE_WEBHOOK_SECRET` with `wrangler secret put --env production`.
-9. Apply D1 migrations and deploy only after final trademark clearance and the launch gate.
+9. Enable the Google Search Console API, create a Web application OAuth client, and register `https://retainerproof.aether42.com/api/search-console/callback`.
+10. Store `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and a dedicated 32-byte `GOOGLE_TOKEN_ENCRYPTION_KEY` as production Worker secrets.
+11. Apply D1 migrations and deploy only after final trademark clearance and the launch gate.
+
+Search Console access is optional and read-only. RetainerProof stores an encrypted refresh token and daily aggregate metrics only for the properties and exact search queries selected by the workspace owner. Search data is not sent to Workers AI. See the production runbook for Google OAuth consent-screen and verification requirements.
 
 See:
 

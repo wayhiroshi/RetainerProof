@@ -13,6 +13,9 @@ test("sample report shows factual scheduled-check language", async ({ page }) =>
   await page.goto("/sample");
   await expect(page.getByRole("heading", { name: "North & Pine Studio" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "30 of 30 scheduled checks passed" })).toBeVisible();
+  await expect(page.getByText("GOOGLE SEARCH VISIBILITY")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "website care studio" })).toBeVisible();
+  await expect(page.getByText("Average position is calculated")).toBeVisible();
   await expect(page.getByText("100% uptime")).toHaveCount(0);
 });
 
@@ -25,6 +28,8 @@ test("Japanese landing and sample report stay in Japanese", async ({ page }) => 
   await expect(page.getByRole("heading", { name: "ノース＆パイン・スタジオ" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "30回中30回の定期確認に成功" })).toBeVisible();
   await expect(page.getByText("WEBサイト保守 / 月次レポート")).toBeVisible();
+  await expect(page.getByText("GOOGLE検索での表示状況")).toBeVisible();
+  await expect(page.getByText("リアルタイム、すべての利用者共通、または保証された順位ではありません")).toBeVisible();
   await expect(page.getByText("100% uptime")).toHaveCount(0);
 });
 

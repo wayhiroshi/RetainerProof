@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 const timestamps = {
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
@@ -281,6 +281,114 @@ export const checkRuns = sqliteTable(
   (table) => [index("check_runs_workspace_asset_date_idx").on(table.workspaceId, table.assetId, table.checkedAt)],
 );
 
+export const searchConsoleConnections = sqliteTable(
+  "search_console_connections",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    connectedByUserId: text("connected_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    encryptedRefreshToken: text("encrypted_refresh_token").notNull(),
+    scope: text("scope").notNull(),
+    connectedAt: integer("connected_at", { mode: "timestamp" }).notNull(),
+    lastError: text("last_error"),
+    ...timestamps,
+  },
+  (table) => [uniqueIndex("search_console_connections_workspace_unique").on(table.workspaceId)],
+);
+
+export const searchConsoleOauthStates = sqliteTable(
+  "search_console_oauth_states",
+  {
+    stateHash: text("state_hash").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
+    consumedAt: integer("consumed_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
+  },
+  (table) => [index("search_console_oauth_states_expiry_idx").on(table.expiresAt)],
+);
+
+export const searchConsoleProperties = sqliteTable(
+  "search_console_properties",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    connectionId: text("connection_id")
+      .notNull()
+      .references(() => searchConsoleConnections.id, { onDelete: "cascade" }),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    siteUrl: text("site_url").notNull(),
+    permissionLevel: text("permission_level").notNull(),
+    lastSyncedAt: integer("last_synced_at", { mode: "timestamp" }),
+    lastError: text("last_error"),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("search_console_properties_workspace_client_unique").on(table.workspaceId, table.clientId),
+    index("search_console_properties_connection_idx").on(table.workspaceId, table.connectionId),
+  ],
+);
+
+export const searchConsoleKeywords = sqliteTable(
+  "search_console_keywords",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    propertyId: text("property_id")
+      .notNull()
+      .references(() => searchConsoleProperties.id, { onDelete: "cascade" }),
+    keyword: text("keyword").notNull(),
+    normalizedKeyword: text("normalized_keyword").notNull(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("search_console_keywords_property_keyword_unique").on(table.propertyId, table.normalizedKeyword),
+    index("search_console_keywords_workspace_client_idx").on(table.workspaceId, table.clientId, table.enabled),
+  ],
+);
+
+export const searchConsoleDailyMetrics = sqliteTable(
+  "search_console_daily_metrics",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    keywordId: text("keyword_id")
+      .notNull()
+      .references(() => searchConsoleKeywords.id, { onDelete: "cascade" }),
+    metricDate: text("metric_date").notNull(),
+    clicks: real("clicks").notNull().default(0),
+    impressions: real("impressions").notNull().default(0),
+    ctr: real("ctr").notNull().default(0),
+    position: real("position"),
+    fetchedAt: integer("fetched_at", { mode: "timestamp" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("search_console_daily_metrics_keyword_date_unique").on(table.keywordId, table.metricDate),
+    index("search_console_daily_metrics_workspace_date_idx").on(table.workspaceId, table.metricDate),
+  ],
+);
+
 export const reports = sqliteTable(
   "reports",
   {
@@ -375,6 +483,11 @@ export const schema = {
   checkDefinitions,
   activities,
   checkRuns,
+  searchConsoleConnections,
+  searchConsoleOauthStates,
+  searchConsoleProperties,
+  searchConsoleKeywords,
+  searchConsoleDailyMetrics,
   reports,
   reportRevisions,
   reportDeliveries,
