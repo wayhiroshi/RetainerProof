@@ -16,20 +16,45 @@ const snapshot: ReportSnapshot = {
     total: 30,
     averageResponseMs: 214,
     status: "Healthy",
+    targets: [
+      {
+        target: "https://example.com/",
+        passed: 30,
+        total: 30,
+        averageResponseMs: 214,
+        tlsExpiresAt: "2026-09-28T00:00:00.000Z",
+        status: "Healthy",
+      },
+    ],
   },
+  maintenanceCoverage: [
+    {
+      name: "Security review",
+      category: "security",
+      frequency: "monthly",
+      completedCount: 1,
+      status: "completed",
+    },
+  ],
   workCompleted: [
     {
       category: "security",
       summary: "Applied routine updates.",
       occurredAt: "2026-06-04T09:00:00.000Z",
+      target: "Main website",
+      outcomeType: "risk_reduced",
+      resultSummary: "Updates completed successfully.",
+      verificationMethod: "Checked public pages.",
+      clientValue: "Reduced exposure to known vulnerabilities.",
     },
   ],
   problemsPrevented: [
-    { summary: "Verified the public site.", occurredAt: "2026-06-04T09:00:00.000Z" },
+    { summary: "Verified the public site.", occurredAt: "2026-06-04T09:00:00.000Z", outcomeType: "routine_verification" },
   ],
   recommendations: [
-    { summary: "Review portfolio images.", occurredAt: "2026-06-20T09:00:00.000Z" },
+    { summary: "Review portfolio images.", occurredAt: "2026-06-20T09:00:00.000Z", priority: "medium", nextAction: "Share candidate images." },
   ],
+  nextMonthPlan: "Continue scheduled care and review the proposed portfolio refresh.",
   closingMessage: "Everything important has been reviewed.",
   generatedAt: "2026-07-01T09:00:00.000Z",
 };
@@ -41,7 +66,12 @@ describe("renderReportHtml", () => {
     expect(html).toContain("WEBSITE CARE / MONTHLY RECORD");
     expect(html).toContain("30 of 30 scheduled checks passed");
     expect(html).toContain("CARE COMPLETED");
-    expect(html).toContain("PROBLEMS PREVENTED");
+    expect(html).toContain("OUTCOMES & VERIFICATION");
+    expect(html).toContain("Security review");
+    expect(html).toContain("Sep 28, 2026");
+    expect(html).toContain("Reduced exposure to known vulnerabilities.");
+    expect(html).toContain("Share candidate images.");
+    expect(html).toContain("NEXT MONTH");
     expect(html).toContain("@page{size:Letter");
     expect(html).not.toContain("100% uptime");
   });

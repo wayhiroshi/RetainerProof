@@ -158,6 +158,35 @@ export const services = sqliteTable(
   (table) => [index("services_workspace_client_idx").on(table.workspaceId, table.clientId)],
 );
 
+export const maintenanceItems = sqliteTable(
+  "maintenance_items",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    category: text("category", {
+      enum: ["updates", "backups", "security", "fixes", "content", "performance", "forms", "support", "other"],
+    }).notNull(),
+    frequency: text("frequency", {
+      enum: ["daily", "weekly", "monthly", "quarterly", "as_needed"],
+    }).notNull().default("monthly"),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    sortOrder: integer("sort_order").notNull().default(0),
+    ...timestamps,
+  },
+  (table) => [
+    index("maintenance_items_workspace_client_idx").on(
+      table.workspaceId,
+      table.clientId,
+      table.enabled,
+      table.sortOrder,
+    ),
+  ],
+);
+
 export const managedAssets = sqliteTable(
   "managed_assets",
   {
@@ -213,8 +242,20 @@ export const activities = sqliteTable(
     visibility: text("visibility", {
       enum: ["client_visible", "internal_only", "recommendation"],
     }).notNull(),
+    maintenanceItemId: text("maintenance_item_id"),
+    target: text("target").notNull().default(""),
+    outcomeType: text("outcome_type", {
+      enum: ["work_completed", "issue_resolved", "risk_reduced", "routine_verification"],
+    }).notNull().default("work_completed"),
     internalNote: text("internal_note").notNull(),
     clientSummary: text("client_summary").notNull(),
+    resultSummary: text("result_summary").notNull().default(""),
+    verificationMethod: text("verification_method").notNull().default(""),
+    clientValue: text("client_value").notNull().default(""),
+    recommendationPriority: text("recommendation_priority", {
+      enum: ["low", "medium", "high"],
+    }),
+    nextAction: text("next_action").notNull().default(""),
     ...timestamps,
   },
   (table) => [index("activities_workspace_client_date_idx").on(table.workspaceId, table.clientId, table.occurredAt)],
@@ -329,6 +370,7 @@ export const schema = {
   subscriptions,
   clients,
   services,
+  maintenanceItems,
   managedAssets,
   checkDefinitions,
   activities,
@@ -343,3 +385,4 @@ export const schema = {
 export type ClientRow = typeof clients.$inferSelect;
 export type ActivityRow = typeof activities.$inferSelect;
 export type ManagedAssetRow = typeof managedAssets.$inferSelect;
+export type MaintenanceItemRow = typeof maintenanceItems.$inferSelect;

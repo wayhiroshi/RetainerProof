@@ -18,7 +18,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:e2e": "npm run db:local && playwright test",
-    "sample:pdf": "vite-node scripts/generate-sample-reports.ts",
+    "sample:pdf": "vite-node --config vite.scripts.config.ts scripts/generate-sample-reports.ts",
     "test:watch": "vitest",
     "verify": "npm run lint && npm run typecheck && npm run test && npm run test:e2e && npm run build && npm run deploy:dry-run"
   },

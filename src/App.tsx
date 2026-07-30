@@ -25,6 +25,16 @@ import { brand } from "./config";
 
 type Locale = "en" | "ja";
 
+type MaintenanceItem = {
+  id: string;
+  clientId: string;
+  name: string;
+  category: string;
+  frequency: "daily" | "weekly" | "monthly" | "quarterly" | "as_needed";
+  enabled: boolean;
+  sortOrder: number;
+};
+
 type Client = {
   id: string;
   name: string;
@@ -32,6 +42,7 @@ type Client = {
   contactEmail: string | null;
   reportLocale: Locale;
   createdAt: string;
+  maintenanceItems: MaintenanceItem[];
   asset?: {
     id: string;
     name: string;
@@ -46,8 +57,16 @@ type Activity = {
   clientName: string;
   occurredAt: string;
   category: string;
+  maintenanceItemId: string | null;
+  target: string;
+  outcomeType: "work_completed" | "issue_resolved" | "risk_reduced" | "routine_verification";
   internalNote: string | null;
   clientDescription: string | null;
+  resultSummary: string;
+  verificationMethod: string;
+  clientValue: string;
+  recommendationPriority: "low" | "medium" | "high" | null;
+  nextAction: string;
   visibility: "client_visible" | "internal_only" | "recommendation";
 };
 
@@ -75,10 +94,40 @@ type EditableReportSnapshot = {
     total: number;
     averageResponseMs: number | null;
     status: string;
+    targets?: Array<{
+      target: string;
+      passed: number;
+      total: number;
+      averageResponseMs: number | null;
+      tlsExpiresAt: string | null;
+      status: string;
+    }>;
   };
-  workCompleted: Array<{ category: string; summary: string; occurredAt: string }>;
-  problemsPrevented: Array<{ summary: string; occurredAt: string }>;
-  recommendations: Array<{ summary: string; occurredAt: string }>;
+  maintenanceCoverage?: Array<{
+    name: string;
+    category: string;
+    frequency: string;
+    completedCount: number;
+    status: "completed" | "not_recorded" | "as_needed";
+  }>;
+  workCompleted: Array<{
+    category: string;
+    summary: string;
+    occurredAt: string;
+    target?: string;
+    outcomeType?: string;
+    resultSummary?: string;
+    verificationMethod?: string;
+    clientValue?: string;
+  }>;
+  problemsPrevented: Array<{ summary: string; occurredAt: string; outcomeType?: string }>;
+  recommendations: Array<{
+    summary: string;
+    occurredAt: string;
+    priority?: "low" | "medium" | "high";
+    nextAction?: string;
+  }>;
+  nextMonthPlan?: string;
   closingMessage: string;
 };
 
@@ -107,10 +156,35 @@ type PublicReport = {
       passed: number;
       failed: number;
       message: string;
+      targets: Array<{
+        target: string;
+        passed: number;
+        total: number;
+        averageResponseMs: number | null;
+        tlsExpiresAt: string | null;
+        status: string;
+      }>;
     };
-    workCompleted: Array<{ category: string; description: string; date: string }>;
-    problemsPrevented: string[];
-    recommendations: string[];
+    maintenanceCoverage: Array<{
+      name: string;
+      category: string;
+      frequency: string;
+      completedCount: number;
+      status: "completed" | "not_recorded" | "as_needed";
+    }>;
+    workCompleted: Array<{
+      category: string;
+      description: string;
+      date: string;
+      target: string;
+      outcomeType: string;
+      resultSummary: string;
+      verificationMethod: string;
+      clientValue: string;
+    }>;
+    problemsPrevented: Array<{ summary: string; outcomeType: string }>;
+    recommendations: Array<{ summary: string; priority: "low" | "medium" | "high"; nextAction: string }>;
+    nextMonthPlan: string;
     closingMessage: string;
   };
 };
@@ -151,6 +225,7 @@ const categories = [
   ["performance", "Performance"],
   ["forms", "Forms"],
   ["support", "Support"],
+  ["other", "Other"],
 ] as const;
 
 function categoryName(category: string, locale: Locale): string {
@@ -164,9 +239,31 @@ function categoryName(category: string, locale: Locale): string {
         performance: "パフォーマンス",
         forms: "フォーム",
         support: "サポート",
+        other: "その他",
       }
     : Object.fromEntries(categories);
   return labels[category] ?? category;
+}
+
+function frequencyName(frequency: string, locale: Locale): string {
+  const labels = locale === "ja"
+    ? { daily: "毎日", weekly: "毎週", monthly: "毎月", quarterly: "四半期", as_needed: "必要時" }
+    : { daily: "Daily", weekly: "Weekly", monthly: "Monthly", quarterly: "Quarterly", as_needed: "As needed" };
+  return labels[frequency as keyof typeof labels] ?? frequency;
+}
+
+function outcomeName(outcome: string, locale: Locale): string {
+  const labels = locale === "ja"
+    ? { work_completed: "作業完了", issue_resolved: "問題解決", risk_reduced: "リスク低減", routine_verification: "定期確認" }
+    : { work_completed: "Work completed", issue_resolved: "Issue resolved", risk_reduced: "Risk reduced", routine_verification: "Routine verification" };
+  return labels[outcome as keyof typeof labels] ?? outcome;
+}
+
+function priorityName(priority: string, locale: Locale): string {
+  const labels = locale === "ja"
+    ? { low: "低", medium: "中", high: "高" }
+    : { low: "Low", medium: "Medium", high: "High" };
+  return labels[priority as keyof typeof labels] ?? priority;
 }
 
 function Icon({ name }: { name: string }) {
@@ -482,24 +579,46 @@ function SampleReport({ locale = "en" }: { locale?: Locale }) {
         passed: 30,
         failed: 0,
         message: tr(locale, "30 of 30 scheduled checks passed", "30回中30回の定期確認に成功"),
+        targets: [
+          {
+            target: "https://northpine.example/",
+            passed: 30,
+            total: 30,
+            averageResponseMs: 214,
+            tlsExpiresAt: "2026-09-28T00:00:00.000Z",
+            status: "Healthy",
+          },
+        ],
       },
-      workCompleted: locale === "ja" ? [
-        { category: "セキュリティ", description: "定期的なセキュリティ更新を適用し、公開サイトを確認しました。", date: "2026-06-04" },
-        { category: "パフォーマンス", description: "トップページの大きな画像を最適化し、表示を改善しました。", date: "2026-06-12" },
-        { category: "コンテンツ", description: "夏季サービスページの改訂版を公開しました。", date: "2026-06-18" },
-        { category: "サポート", description: "フッターの連絡先表示に関する問題を解決しました。", date: "2026-06-25" },
+      maintenanceCoverage: locale === "ja" ? [
+        { name: "公開サイト確認", category: "support", frequency: "daily", completedCount: 30, status: "completed" },
+        { name: "セキュリティ確認", category: "security", frequency: "monthly", completedCount: 1, status: "completed" },
+        { name: "バックアップ準備確認", category: "backups", frequency: "monthly", completedCount: 1, status: "completed" },
+        { name: "フォーム・主要機能確認", category: "forms", frequency: "monthly", completedCount: 1, status: "completed" },
       ] : [
-        { category: "Security", description: "Applied routine security updates and verified the public site.", date: "2026-06-04" },
-        { category: "Performance", description: "Optimized large homepage images for faster delivery.", date: "2026-06-12" },
-        { category: "Content", description: "Published the revised summer services page.", date: "2026-06-18" },
-        { category: "Support", description: "Resolved an issue affecting the contact details in the footer.", date: "2026-06-25" },
+        { name: "Public site checks", category: "support", frequency: "daily", completedCount: 30, status: "completed" },
+        { name: "Security review", category: "security", frequency: "monthly", completedCount: 1, status: "completed" },
+        { name: "Backup readiness review", category: "backups", frequency: "monthly", completedCount: 1, status: "completed" },
+        { name: "Forms and key-function review", category: "forms", frequency: "monthly", completedCount: 1, status: "completed" },
+      ],
+      workCompleted: locale === "ja" ? [
+        { category: "セキュリティ", description: "定期的なセキュリティ更新を適用しました。", date: "2026-06-04", target: "メインサイト", outcomeType: "risk_reduced", resultSummary: "すべての更新が正常に完了しました。", verificationMethod: "公開ページと管理機能を確認", clientValue: "既知の脆弱性に対する露出を減らしました。" },
+        { category: "パフォーマンス", description: "トップページの大きな画像を最適化しました。", date: "2026-06-12", target: "トップページ", outcomeType: "work_completed", resultSummary: "画像容量を削減しました。", verificationMethod: "公開ページをモバイルで確認", clientValue: "訪問者がページを閲覧しやすくなりました。" },
+        { category: "コンテンツ", description: "夏季サービスページの改訂版を公開しました。", date: "2026-06-18", target: "サービスページ", outcomeType: "work_completed", resultSummary: "新しい内容が公開されています。", verificationMethod: "公開URLを確認", clientValue: "最新のサービス情報を案内できます。" },
+        { category: "サポート", description: "フッターの連絡先表示に関する問題を修正しました。", date: "2026-06-25", target: "サイト共通フッター", outcomeType: "issue_resolved", resultSummary: "正しい連絡先が全ページに表示されています。", verificationMethod: "デスクトップとモバイルで確認", clientValue: "訪問者が正しい窓口へ連絡できます。" },
+      ] : [
+        { category: "Security", description: "Applied routine security updates.", date: "2026-06-04", target: "Main website", outcomeType: "risk_reduced", resultSummary: "All updates completed successfully.", verificationMethod: "Reviewed public pages and administration", clientValue: "Reduced exposure to known vulnerabilities." },
+        { category: "Performance", description: "Optimized large homepage images for faster delivery.", date: "2026-06-12", target: "Homepage", outcomeType: "work_completed", resultSummary: "Reduced image payload size.", verificationMethod: "Reviewed the live page on mobile", clientValue: "Visitors can reach the page content more quickly." },
+        { category: "Content", description: "Published the revised summer services page.", date: "2026-06-18", target: "Services page", outcomeType: "work_completed", resultSummary: "The revised content is live.", verificationMethod: "Checked the public URL", clientValue: "Visitors now see current service information." },
+        { category: "Support", description: "Resolved an issue affecting the contact details in the footer.", date: "2026-06-25", target: "Site-wide footer", outcomeType: "issue_resolved", resultSummary: "The correct details now appear across the site.", verificationMethod: "Checked desktop and mobile layouts", clientValue: "Visitors can reach the correct contact channel." },
       ],
       problemsPrevented: locale === "ja"
-        ? ["保守作業を完了する前に、公開サイトで更新結果を確認しました。", "重要なページへ正常にアクセスできることを確認しました。"]
-        : ["Verified updates on the public site before closing the maintenance task.", "Confirmed important pages remained reachable throughout the month."],
+        ? [{ summary: "セキュリティ更新を適用し、公開サイトの正常動作を確認しました。", outcomeType: "risk_reduced" }, { summary: "重要ページへの定期確認はすべて成功しました。", outcomeType: "routine_verification" }]
+        : [{ summary: "Applied security updates and confirmed the public site remained functional.", outcomeType: "risk_reduced" }, { summary: "Every scheduled observation of important pages passed.", outcomeType: "routine_verification" }],
       recommendations: locale === "ja"
-        ? ["来月、ポートフォリオ写真の見直しと更新をご検討ください。"]
-        : ["Review and refresh the portfolio photography next month."],
+        ? [{ summary: "ポートフォリオ写真の見直しと更新をご検討ください。", priority: "medium", nextAction: "来月の保守前に更新候補の写真をご共有ください。" }]
+        : [{ summary: "Review and refresh the portfolio photography.", priority: "medium", nextAction: "Share candidate images before next month's care visit." }],
+      nextMonthPlan: tr(locale, "Continue scheduled care and review the proposed portfolio refresh.", "定期保守を継続し、提案中のポートフォリオ写真更新を確認します。"),
       closingMessage: tr(
         locale,
         "Your website is in good shape. We will continue monitoring it and taking care of routine maintenance next month.",
@@ -837,6 +956,7 @@ function ClientsPage() {
   const locale = useUiLocale();
   const [clients, setClients] = useState<Client[]>([]);
   const [open, setOpen] = useState(false);
+  const [careClientId, setCareClientId] = useState("");
   const [error, setError] = useState("");
   const load = useCallback(() => {
     void api<{ clients: Client[] }>("/api/clients")
@@ -887,6 +1007,48 @@ function ClientsPage() {
     }
   }
 
+  async function addMaintenanceItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    try {
+      await api(`/api/clients/${careClientId}/maintenance-items`, {
+        method: "POST",
+        body: JSON.stringify({
+          name: data.get("name"),
+          category: data.get("category"),
+          frequency: data.get("frequency"),
+        }),
+      });
+      event.currentTarget.reset();
+      load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : tr(locale, "Could not add the care item.", "保守項目を追加できませんでした。"));
+    }
+  }
+
+  async function updateMaintenanceItem(id: string, input: Partial<Pick<MaintenanceItem, "frequency" | "enabled">>) {
+    try {
+      await api(`/api/maintenance-items/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(input),
+      });
+      load();
+    } catch {
+      setError(tr(locale, "Could not update the care item.", "保守項目を更新できませんでした。"));
+    }
+  }
+
+  async function deleteMaintenanceItem(id: string) {
+    try {
+      await api(`/api/maintenance-items/${id}`, { method: "DELETE" });
+      load();
+    } catch {
+      setError(tr(locale, "Could not remove the care item.", "保守項目を削除できませんでした。"));
+    }
+  }
+
+  const careClient = clients.find((client) => client.id === careClientId) ?? null;
+
   return (
     <>
       <PageHeader kicker={tr(locale, "YOUR CARE ROSTER", "保守クライアント一覧")} title={tr(locale, "Clients", "クライアント")}>
@@ -915,6 +1077,11 @@ function ClientsPage() {
                   <option value="ja">日本語</option>
                 </select>
               </label>
+              <div className="care-plan-preview">
+                <span>{tr(locale, "Care plan", "保守プラン")}</span>
+                <b>{tr(locale, `${client.maintenanceItems.filter((item) => item.enabled).length} configured items`, `${client.maintenanceItems.filter((item) => item.enabled).length}項目`)}</b>
+                <button type="button" className="text-button" onClick={() => setCareClientId(client.id)}>{tr(locale, "Manage", "管理")}</button>
+              </div>
               <div className="client-card-foot">
                 <Link to={`/app/activity?client=${client.id}`}>{tr(locale, "Add activity", "作業を記録")}</Link>
                 <Link to={`/app/reports?client=${client.id}`}>{tr(locale, "Create report", "レポート作成")}</Link>
@@ -951,6 +1118,36 @@ function ClientsPage() {
           </form>
         </Modal>
       )}
+      {careClient && (
+        <Modal title={tr(locale, `${careClient.name} care plan`, `${careClient.name}の保守プラン`)} onClose={() => setCareClientId("")}>
+          <div className="care-plan-editor">
+            <p>{tr(locale, "These items define the agreed maintenance scope shown in monthly reports.", "月次レポートに表示する、合意済みの保守範囲を設定します。")}</p>
+            <div className="care-plan-list">
+              {careClient.maintenanceItems.length ? careClient.maintenanceItems.map((item) => (
+                <div className={!item.enabled ? "disabled" : ""} key={item.id}>
+                  <label className="care-toggle">
+                    <input type="checkbox" checked={item.enabled} onChange={(event) => void updateMaintenanceItem(item.id, { enabled: event.target.checked })} />
+                    <span><b>{item.name}</b><small>{categoryName(item.category, locale)}</small></span>
+                  </label>
+                  <select value={item.frequency} onChange={(event) => void updateMaintenanceItem(item.id, { frequency: event.target.value as MaintenanceItem["frequency"] })}>
+                    {(["daily", "weekly", "monthly", "quarterly", "as_needed"] as const).map((frequency) => <option value={frequency} key={frequency}>{frequencyName(frequency, locale)}</option>)}
+                  </select>
+                  <button type="button" className="text-button danger" onClick={() => void deleteMaintenanceItem(item.id)}>{tr(locale, "Remove", "削除")}</button>
+                </div>
+              )) : <p>{tr(locale, "No care items configured.", "保守項目はまだありません。")}</p>}
+            </div>
+            <form className="care-plan-add" onSubmit={addMaintenanceItem}>
+              <label>{tr(locale, "New care item", "新しい保守項目")}<input name="name" required maxLength={120} placeholder={tr(locale, "Example: Monthly form test", "例：月次フォーム確認")} /></label>
+              <div className="form-row">
+                <label>{tr(locale, "Category", "カテゴリー")}<select name="category" defaultValue="support">{categories.map(([value]) => <option value={value} key={value}>{categoryName(value, locale)}</option>)}</select></label>
+                <label>{tr(locale, "Frequency", "頻度")}<select name="frequency" defaultValue="monthly">{(["daily", "weekly", "monthly", "quarterly", "as_needed"] as const).map((frequency) => <option value={frequency} key={frequency}>{frequencyName(frequency, locale)}</option>)}</select></label>
+              </div>
+              <button className="button button-small">{tr(locale, "Add care item", "保守項目を追加")}</button>
+            </form>
+            {error && <div className="form-error">{error}</div>}
+          </div>
+        </Modal>
+      )}
     </>
   );
 }
@@ -966,7 +1163,7 @@ function ActivityRow({ activity }: { activity: Activity }) {
   return (
     <div className="activity-row">
       <span className={`category-dot ${activity.category}`} />
-      <div><b>{activity.clientDescription || activity.internalNote || category}</b><small>{activity.clientName} · {new Date(activity.occurredAt).toLocaleDateString(locale === "ja" ? "ja-JP" : "en-US")}</small></div>
+      <div><b>{activity.clientDescription || activity.internalNote || category}</b><small>{activity.clientName} · {outcomeName(activity.outcomeType, locale)} · {new Date(activity.occurredAt).toLocaleDateString(locale === "ja" ? "ja-JP" : "en-US")}</small>{activity.resultSummary && <small>{tr(locale, "Result", "結果")}: {activity.resultSummary}</small>}</div>
       <span className={`visibility ${activity.visibility}`}>{visibilityLabel}</span>
     </div>
   );
@@ -980,6 +1177,7 @@ function ActivityPage() {
   const [error, setError] = useState("");
   const [category, setCategory] = useState("updates");
   const [visibility, setVisibility] = useState("client_visible");
+  const [outcomeType, setOutcomeType] = useState<Activity["outcomeType"]>("work_completed");
   const [description, setDescription] = useState("");
   const [aiRewriteId, setAiRewriteId] = useState("");
   const [rewriting, setRewriting] = useState(false);
@@ -1025,9 +1223,17 @@ function ActivityPage() {
         method: "POST",
         body: JSON.stringify({
           clientId: data.get("clientId"),
+          maintenanceItemId: data.get("maintenanceItemId") || undefined,
           category,
+          target: data.get("target") || undefined,
+          outcomeType,
           internalNote: data.get("internalNote") || undefined,
           clientDescription: description || undefined,
+          resultSummary: data.get("resultSummary") || undefined,
+          verificationMethod: data.get("verificationMethod") || undefined,
+          clientValue: data.get("clientValue") || undefined,
+          recommendationPriority: data.get("recommendationPriority") || undefined,
+          nextAction: data.get("nextAction") || undefined,
           aiRewriteId: aiRewriteId || undefined,
           visibility,
           occurredAt: new Date(`${data.get("date")}T12:00:00`).toISOString(),
@@ -1037,6 +1243,7 @@ function ActivityPage() {
       setDescription("");
       setAiRewriteId("");
       setCategory("updates");
+      setOutcomeType("work_completed");
       load();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : tr(locale, "Could not save activity.", "作業記録を保存できませんでした。"));
@@ -1063,14 +1270,44 @@ function ActivityPage() {
               <label>{tr(locale, "Client", "クライアント")}<select name="clientId" required value={selectedClientId} onChange={(event) => setSelectedClientId(event.target.value)}>{clients.map((client) => <option value={client.id} key={client.id}>{client.name} · {client.reportLocale === "ja" ? "日本語" : "English"}</option>)}</select></label>
               <label>{tr(locale, "Date", "作業日")}<input name="date" type="date" required defaultValue={new Date().toISOString().slice(0, 10)} /></label>
             </div>
+            <label>{tr(locale, "Care plan item", "保守プラン項目")} <span className="optional">{tr(locale, "optional", "任意")}</span>
+              <select
+                name="maintenanceItemId"
+                defaultValue=""
+                onChange={(event) => {
+                  const selected = clients
+                    .find((client) => client.id === selectedClientId)
+                    ?.maintenanceItems.find((item) => item.id === event.target.value);
+                  if (selected) setCategory(selected.category);
+                }}
+              >
+                <option value="">{tr(locale, "Not linked to a care item", "保守項目に関連付けない")}</option>
+                {clients.find((client) => client.id === selectedClientId)?.maintenanceItems.filter((item) => item.enabled).map((item) => <option value={item.id} key={item.id}>{item.name} · {frequencyName(item.frequency, locale)}</option>)}
+              </select>
+            </label>
             <fieldset className="category-picker">
               <legend>{tr(locale, "What kind of work?", "どのような作業ですか？")}</legend>
               <div>{categories.map(([value]) => <button type="button" className={category === value ? "active" : ""} onClick={() => setCategory(value)} key={value}>{categoryName(value, locale)}</button>)}</div>
             </fieldset>
-            <label>{tr(locale, "Client-facing description", "お客様向けの説明")}<textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder={tr(locale, "Example: Updated the site software and checked the public pages.", "例：サイトのソフトウェアを更新し、公開ページを確認しました。")} rows={3} /></label>
+            <label>{tr(locale, "Work performed", "実施内容")}<textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder={tr(locale, "Example: Updated the site software.", "例：サイトのソフトウェアを更新しました。")} rows={3} /></label>
             <button type="button" className="rewrite-button" onClick={rewrite} disabled={rewriting || !description.trim()}>
               ✦ {rewriting ? tr(locale, "Rewriting…", "変換中…") : tr(locale, "Rewrite for client", "お客様向けに書き換える")} <small>{tr(locale, "Only this description is sent to AI", "この説明文だけをAIへ送信します")}</small>
             </button>
+            <fieldset className="outcome-picker">
+              <legend>{tr(locale, "What kind of outcome?", "成果の種類")}</legend>
+              <div>
+                {(["work_completed", "issue_resolved", "risk_reduced", "routine_verification"] as const).map((value) => (
+                  <button type="button" className={outcomeType === value ? "active" : ""} onClick={() => setOutcomeType(value)} key={value}>{outcomeName(value, locale)}</button>
+                ))}
+              </div>
+            </fieldset>
+            <details className="activity-details">
+              <summary>{tr(locale, "Add result and evidence", "結果と確認内容を追加")}</summary>
+              <label>{tr(locale, "Target page or function", "対象ページ・機能")}<input name="target" maxLength={300} placeholder={tr(locale, "Contact form, homepage, checkout…", "お問い合わせフォーム、トップページ、決済など")} /></label>
+              <label>{tr(locale, "Result", "結果")}<textarea name="resultSummary" maxLength={500} rows={2} placeholder={tr(locale, "What was true after the work?", "作業後にどのような状態になりましたか？")} /></label>
+              <label>{tr(locale, "Verification method", "確認方法")}<textarea name="verificationMethod" maxLength={500} rows={2} placeholder={tr(locale, "Checked the public page on desktop and mobile.", "公開ページをパソコンとスマートフォンで確認。")} /></label>
+              <label>{tr(locale, "Client value", "お客様への価値")}<textarea name="clientValue" maxLength={500} rows={2} placeholder={tr(locale, "Why does this matter to the client?", "お客様にとってどのような意味がありますか？")} /></label>
+            </details>
             <label>{tr(locale, "Internal note", "内部メモ")} <span className="optional">{tr(locale, "never shown to the client", "お客様には表示されません")}</span><textarea name="internalNote" placeholder={tr(locale, "Technical details, ticket number, credentials reminder…", "技術的な詳細、チケット番号、認証情報に関する注意など")} rows={2} /></label>
             <fieldset className="visibility-picker">
               <legend>{tr(locale, "Where should this appear?", "どこに表示しますか？")}</legend>
@@ -1080,6 +1317,12 @@ function ActivityPage() {
                 ["recommendation", tr(locale, "Recommendation", "ご提案"), tr(locale, "Next-step section", "今後のご提案")],
               ].map(([value, title, help]) => <label className={visibility === value ? "active" : ""} key={value}><input type="radio" checked={visibility === value} onChange={() => setVisibility(value)} /><span><b>{title}</b><small>{help}</small></span></label>)}
             </fieldset>
+            {visibility === "recommendation" && (
+              <div className="recommendation-fields">
+                <label>{tr(locale, "Priority", "優先度")}<select name="recommendationPriority" defaultValue="medium"><option value="low">{priorityName("low", locale)}</option><option value="medium">{priorityName("medium", locale)}</option><option value="high">{priorityName("high", locale)}</option></select></label>
+                <label>{tr(locale, "Next action", "次のアクション")}<input name="nextAction" maxLength={500} placeholder={tr(locale, "Example: Approve the proposed change by August 15.", "例：8月15日までに変更案をご確認ください。")} /></label>
+              </div>
+            )}
             {error && <div className="form-error">{error}</div>}
             <div className="modal-actions"><button type="button" className="button button-ghost" onClick={() => setOpen(false)}>{tr(locale, "Cancel", "キャンセル")}</button><button className="button">{tr(locale, "Save activity", "作業を保存")} <Icon name="check" /></button></div>
           </form>
@@ -1169,7 +1412,10 @@ function ReportsPage() {
           recommendations: snapshot.recommendations.map((item, index) => ({
             ...item,
             summary: data.get(`recommendation-${index}`),
+            priority: data.get(`recommendation-priority-${index}`),
+            nextAction: data.get(`recommendation-action-${index}`),
           })),
+          nextMonthPlan: data.get("nextMonthPlan"),
           closingMessage: data.get("closingMessage"),
         }),
       });
@@ -1298,17 +1544,22 @@ function ReportsPage() {
               )) : <p>{tr(locale, "No client-visible work was recorded.", "お客様向けの作業記録はありません。")}</p>}
             </fieldset>
             <fieldset className="review-group">
-              <legend>{tr(locale, "Problems prevented", "問題の予防")}</legend>
+              <legend>{tr(locale, "Outcomes and verification", "成果と確認")}</legend>
               {reviewing.snapshot.problemsPrevented.length ? reviewing.snapshot.problemsPrevented.map((item, index) => (
-                <label key={`${item.occurredAt}-${index}`}><input name={`problem-${index}`} required defaultValue={item.summary} /></label>
-              )) : <p>{tr(locale, "No prevention items were recorded.", "予防対応の記録はありません。")}</p>}
+                <label key={`${item.occurredAt}-${index}`}><span>{outcomeName(item.outcomeType ?? "routine_verification", reviewing.snapshot.locale ?? "en")}</span><input name={`problem-${index}`} required defaultValue={item.summary} /></label>
+              )) : <p>{tr(locale, "No separately classified outcomes were recorded.", "区分された成果・確認記録はありません。")}</p>}
             </fieldset>
             <fieldset className="review-group">
               <legend>{tr(locale, "Recommendations", "今後のご提案")}</legend>
               {reviewing.snapshot.recommendations.length ? reviewing.snapshot.recommendations.map((item, index) => (
-                <label key={`${item.occurredAt}-${index}`}><input name={`recommendation-${index}`} required defaultValue={item.summary} /></label>
+                <div className="review-recommendation" key={`${item.occurredAt}-${index}`}>
+                  <label>{tr(locale, "Recommendation", "提案内容")}<input name={`recommendation-${index}`} required defaultValue={item.summary} /></label>
+                  <label>{tr(locale, "Priority", "優先度")}<select name={`recommendation-priority-${index}`} defaultValue={item.priority ?? "medium"}><option value="low">{priorityName("low", locale)}</option><option value="medium">{priorityName("medium", locale)}</option><option value="high">{priorityName("high", locale)}</option></select></label>
+                  <label>{tr(locale, "Next action", "次のアクション")}<input name={`recommendation-action-${index}`} defaultValue={item.nextAction ?? ""} /></label>
+                </div>
               )) : <p>{tr(locale, "No recommendations this month.", "今月のご提案はありません。")}</p>}
             </fieldset>
+            <label>{tr(locale, "Next month plan", "翌月の予定")}<textarea name="nextMonthPlan" required rows={3} defaultValue={reviewing.snapshot.nextMonthPlan ?? tr(reviewing.snapshot.locale ?? "en", "Continue the configured care schedule and public-site observations next month.", "翌月も設定済みの保守予定と公開サイトの定期確認を継続します。")} /></label>
             <label>{tr(locale, "Closing message", "おわりのメッセージ")}<textarea name="closingMessage" required rows={3} defaultValue={reviewing.snapshot.closingMessage} /></label>
             <label>
               {tr(locale, "Send report link to", "レポート送信先")}
@@ -1521,6 +1772,37 @@ function PublicReportView({ report, sample = false }: { report: PublicReport; sa
           <p className="report-evidence-note">
             {tr(locale, "RetainerProof reports scheduled observations only. It does not estimate uptime or make guarantees about availability.", "RetainerProofは定期確認の観測結果のみを掲載します。稼働率の推定や可用性の保証を行うものではありません。")}
           </p>
+          {report.snapshot.currentHealth.targets.length > 0 && (
+            <div className="report-table-wrap">
+              <table className="report-data-table">
+                <thead><tr><th>{tr(locale, "Target", "確認対象")}</th><th>{tr(locale, "Checks passed", "確認成功数")}</th><th>{tr(locale, "Average response", "平均応答")}</th><th>{tr(locale, "SSL certificate", "SSL証明書")}</th></tr></thead>
+                <tbody>{report.snapshot.currentHealth.targets.map((target) => (
+                  <tr key={target.target}>
+                    <td>{target.target}</td>
+                    <td>{target.passed} / {target.total}</td>
+                    <td>{target.averageResponseMs === null ? "—" : `${target.averageResponseMs} ms`}</td>
+                    <td>{target.tlsExpiresAt ? new Date(target.tlsExpiresAt).toLocaleDateString(dateLocale) : tr(locale, "Valid when checked; expiry unavailable", "確認時は有効・期限未取得")}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          )}
+          {report.snapshot.maintenanceCoverage.length > 0 && (
+            <div className="report-table-wrap coverage">
+              <h3>{tr(locale, "Maintenance coverage", "保守範囲の実施記録")}</h3>
+              <table className="report-data-table">
+                <thead><tr><th>{tr(locale, "Care item", "保守項目")}</th><th>{tr(locale, "Frequency", "頻度")}</th><th>{tr(locale, "Records", "記録数")}</th><th>{tr(locale, "Status", "状態")}</th></tr></thead>
+                <tbody>{report.snapshot.maintenanceCoverage.map((item) => (
+                  <tr key={`${item.name}-${item.frequency}`}>
+                    <td>{item.name}</td>
+                    <td>{frequencyName(item.frequency, locale)}</td>
+                    <td>{item.completedCount}</td>
+                    <td><span className={`coverage-pill ${item.status}`}>{item.status === "completed" ? tr(locale, "Recorded", "実施記録あり") : item.status === "as_needed" ? tr(locale, "As needed", "必要時") : tr(locale, "No activity recorded", "記録なし")}</span></td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          )}
         </section>
 
         <section className="report-work">
@@ -1533,8 +1815,12 @@ function PublicReportView({ report, sample = false }: { report: PublicReport; sa
               <article key={`${work.date}-${index}`}>
                 <span className="work-index">{String(index + 1).padStart(2, "0")}</span>
                 <div>
-                  <b>{work.category}</b>
+                  <b>{work.category} · {outcomeName(work.outcomeType, locale)}</b>
                   <h3>{work.description}</h3>
+                  {work.target && <p className="report-work-detail"><strong>{tr(locale, "Target", "対象")}:</strong> {work.target}</p>}
+                  {work.resultSummary && <p className="report-work-detail"><strong>{tr(locale, "Result", "結果")}:</strong> {work.resultSummary}</p>}
+                  {work.verificationMethod && <p className="report-work-detail"><strong>{tr(locale, "Verified by", "確認方法")}:</strong> {work.verificationMethod}</p>}
+                  {work.clientValue && <p className="report-work-detail"><strong>{tr(locale, "Client value", "お客様への価値")}:</strong> {work.clientValue}</p>}
                 </div>
                 <time>{new Date(work.date).toLocaleDateString(dateLocale, { month: "short", day: "numeric" })}</time>
               </article>
@@ -1548,12 +1834,12 @@ function PublicReportView({ report, sample = false }: { report: PublicReport; sa
           <article>
             <div className="insight-heading">
               <span>04</span>
-              <div><small>{tr(locale, "PROBLEMS PREVENTED", "問題の予防")}</small><p>{tr(locale, "Quiet wins", "目立たない成果")}</p></div>
+              <div><small>{tr(locale, "OUTCOMES & VERIFICATION", "成果と確認")}</small><p>{tr(locale, "What changed and how it was checked", "何が変わり、どう確認したか")}</p></div>
             </div>
             <ul>
               {report.snapshot.problemsPrevented.length
-                ? report.snapshot.problemsPrevented.map((item) => <li key={item}><span><Icon name="check" /></span><p>{item}</p></li>)
-                : <li className="empty-insight"><p>{tr(locale, "No preventable issues were recorded.", "予防対応として記録された項目はありません。")}</p></li>}
+                ? report.snapshot.problemsPrevented.map((item, index) => <li key={`${item.summary}-${index}`}><span><Icon name="check" /></span><p><b>{outcomeName(item.outcomeType, locale)}</b><br />{item.summary}</p></li>)
+                : <li className="empty-insight"><p>{tr(locale, "No separately classified outcomes were recorded.", "区分された成果・確認記録はありません。")}</p></li>}
             </ul>
           </article>
           <article className="recommendations-card">
@@ -1563,10 +1849,15 @@ function PublicReportView({ report, sample = false }: { report: PublicReport; sa
             </div>
             <ul>
               {report.snapshot.recommendations.length
-                ? report.snapshot.recommendations.map((item) => <li key={item}><span><Icon name="arrow" /></span><p>{item}</p></li>)
+                ? report.snapshot.recommendations.map((item, index) => <li key={`${item.summary}-${index}`}><span><Icon name="arrow" /></span><p><b>{tr(locale, "Priority", "優先度")}: {priorityName(item.priority, locale)}</b><br />{item.summary}{item.nextAction && <><br /><em>{tr(locale, "Next action", "次のアクション")}: {item.nextAction}</em></>}</p></li>)
                 : <li className="empty-insight"><p>{tr(locale, "No recommendations this month.", "今月のご提案はありません。")}</p></li>}
             </ul>
           </article>
+        </section>
+
+        <section className="report-next-month">
+          <small>{tr(locale, "NEXT MONTH", "翌月の予定")}</small>
+          <h2>{report.snapshot.nextMonthPlan}</h2>
         </section>
 
         <section className="report-closing">

@@ -146,6 +146,43 @@ test("one workspace cannot read or write another workspace data", async ({ brows
     expect.objectContaining({ id: clientA, reportLocale: "ja" }),
   ]);
 
+  const careItemResponse = await request.post(`${baseURL}/api/clients/${clientA}/maintenance-items`, {
+    data: {
+      name: "月次セキュリティ確認",
+      category: "security",
+      frequency: "monthly",
+    },
+    headers: localeHeaders,
+  });
+  expect(careItemResponse.status()).toBe(201);
+  const careItem = (await careItemResponse.json()) as { id: string };
+  expect((await request.post(`${baseURL}/api/clients/${clientB}/maintenance-items`, {
+    data: {
+      name: "Must not be stored",
+      category: "security",
+      frequency: "monthly",
+    },
+    headers: localeHeaders,
+  })).status()).toBe(404);
+
+  const evidenceActivityResponse = await request.post(`${baseURL}/api/activities`, {
+    data: {
+      clientId: clientA,
+      maintenanceItemId: careItem.id,
+      occurredAt: "2026-01-15T03:00:00.000Z",
+      category: "security",
+      visibility: "client_visible",
+      target: "公開サイト",
+      outcomeType: "risk_reduced",
+      clientDescription: "公開サイトのセキュリティ設定を確認しました。",
+      resultSummary: "既知の問題は見つかりませんでした。",
+      verificationMethod: "公開レスポンスと設定記録を照合",
+      clientValue: "設定不備による障害リスクを低減しました。",
+    },
+    headers: localeHeaders,
+  });
+  expect(evidenceActivityResponse.status()).toBe(201);
+
   const japaneseDraftResponse = await request.post(`${baseURL}/api/reports/draft`, {
     data: {
       clientId: clientA,
@@ -158,11 +195,40 @@ test("one workspace cannot read or write another workspace data", async ({ brows
   expect(japaneseDraftResponse.status()).toBe(201);
   const japaneseDraft = (await japaneseDraftResponse.json()) as {
     reportId: string;
-    snapshot: { locale: string; period: { label: string }; executiveSummary: string };
+    snapshot: {
+      locale: string;
+      period: { label: string };
+      executiveSummary: string;
+      maintenanceCoverage: Array<{ name: string; status: string; completedCount: number }>;
+      workCompleted: Array<{
+        outcomeType: string;
+        resultSummary: string;
+        verificationMethod: string;
+        clientValue: string;
+      }>;
+      problemsPrevented: Array<{ outcomeType: string }>;
+      nextMonthPlan: string;
+    };
   };
   expect(japaneseDraft.snapshot.locale).toBe("ja");
   expect(japaneseDraft.snapshot.period.label).toBe("2026年1月");
   expect(japaneseDraft.snapshot.executiveSummary).toContain("定期保守");
+  expect(japaneseDraft.snapshot.executiveSummary).toContain("1件");
+  expect(japaneseDraft.snapshot.maintenanceCoverage).toEqual([
+    expect.objectContaining({ name: "月次セキュリティ確認", status: "completed", completedCount: 1 }),
+  ]);
+  expect(japaneseDraft.snapshot.workCompleted).toEqual([
+    expect.objectContaining({
+      outcomeType: "risk_reduced",
+      resultSummary: "既知の問題は見つかりませんでした。",
+      verificationMethod: "公開レスポンスと設定記録を照合",
+      clientValue: "設定不備による障害リスクを低減しました。",
+    }),
+  ]);
+  expect(japaneseDraft.snapshot.problemsPrevented).toEqual([
+    expect.objectContaining({ outcomeType: "risk_reduced" }),
+  ]);
+  expect(japaneseDraft.snapshot.nextMonthPlan).toContain("月次セキュリティ確認");
   const japaneseDetail = (await (await request.get(`${baseURL}/api/reports/${japaneseDraft.reportId}`)).json()) as {
     snapshot: { locale: string };
   };
@@ -188,6 +254,7 @@ test("one workspace cannot read or write another workspace data", async ({ brows
       workCompleted: [],
       problemsPrevented: [],
       recommendations: [],
+      nextMonthPlan: "Attempted overwrite.",
       closingMessage: "Attempted overwrite.",
     },
     headers: { origin: baseURL ?? "http://localhost:5173" },

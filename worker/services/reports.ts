@@ -4,6 +4,7 @@ import {
   activities,
   checkRuns,
   clients,
+  maintenanceItems,
   managedAssets,
   reportRevisions,
   reports,
@@ -24,10 +25,40 @@ export interface ReportSnapshot {
     total: number;
     averageResponseMs: number | null;
     status: "Healthy" | "Needs attention" | "No checks";
+    targets?: Array<{
+      target: string;
+      passed: number;
+      total: number;
+      averageResponseMs: number | null;
+      tlsExpiresAt: string | null;
+      status: "Healthy" | "Needs attention";
+    }>;
   };
-  workCompleted: Array<{ category: string; summary: string; occurredAt: string }>;
-  problemsPrevented: Array<{ summary: string; occurredAt: string }>;
-  recommendations: Array<{ summary: string; occurredAt: string }>;
+  maintenanceCoverage?: Array<{
+    name: string;
+    category: string;
+    frequency: string;
+    completedCount: number;
+    status: "completed" | "not_recorded" | "as_needed";
+  }>;
+  workCompleted: Array<{
+    category: string;
+    summary: string;
+    occurredAt: string;
+    target?: string;
+    outcomeType?: string;
+    resultSummary?: string;
+    verificationMethod?: string;
+    clientValue?: string;
+  }>;
+  problemsPrevented: Array<{ summary: string; occurredAt: string; outcomeType?: string }>;
+  recommendations: Array<{
+    summary: string;
+    occurredAt: string;
+    priority?: "low" | "medium" | "high";
+    nextAction?: string;
+  }>;
+  nextMonthPlan?: string;
   closingMessage: string;
   generatedAt: string;
 }
@@ -40,7 +71,7 @@ export async function buildReportSnapshot(
   periodEnd: Date,
 ): Promise<ReportSnapshot> {
   const db = drizzle(env.DB);
-  const [client, workspace, activityRows, runRows] = await Promise.all([
+  const [client, workspace, activityRows, runRows, maintenanceRows] = await Promise.all([
     db
       .select({ name: clients.name, reportLocale: clients.reportLocale })
       .from(clients)
@@ -67,6 +98,7 @@ export async function buildReportSnapshot(
       .select({
         status: checkRuns.status,
         responseMs: checkRuns.responseMs,
+        tlsExpiresAt: checkRuns.tlsExpiresAt,
         attempt: checkRuns.attempt,
         target: checkRuns.target,
         checkedAt: checkRuns.checkedAt,
@@ -81,6 +113,17 @@ export async function buildReportSnapshot(
           lte(checkRuns.checkedAt, periodEnd),
         ),
       ),
+    db
+      .select()
+      .from(maintenanceItems)
+      .where(
+        and(
+          eq(maintenanceItems.workspaceId, workspaceId),
+          eq(maintenanceItems.clientId, clientId),
+          eq(maintenanceItems.enabled, true),
+        ),
+      )
+      .orderBy(asc(maintenanceItems.sortOrder), asc(maintenanceItems.createdAt)),
   ]);
   if (!client || !workspace) throw new Error("REPORT_CONTEXT_NOT_FOUND");
 
@@ -93,15 +136,55 @@ export async function buildReportSnapshot(
   const finalRuns = [...finalRunsBySchedule.values()];
   const visible = activityRows.filter((row) => row.visibility === "client_visible");
   const recommendations = activityRows.filter((row) => row.visibility === "recommendation");
-  const problems = visible.filter((row) => ["fixes", "security", "forms"].includes(row.category));
+  const outcomes = visible.filter((row) => row.outcomeType !== "work_completed");
   const passed = finalRuns.filter((run) => run.status === "passed").length;
   const measured = finalRuns.map((run) => run.responseMs).filter((value): value is number => value !== null);
   const averageResponseMs =
     measured.length > 0 ? Math.round(measured.reduce((sum, value) => sum + value, 0) / measured.length) : null;
   const healthStatus =
     finalRuns.length === 0 ? "No checks" : passed === finalRuns.length ? "Healthy" : "Needs attention";
+  const targets = [...new Set(finalRuns.map((run) => run.target))].map((target) => {
+    const targetRuns = finalRuns.filter((run) => run.target === target);
+    const targetPassed = targetRuns.filter((run) => run.status === "passed").length;
+    const responseTimes = targetRuns
+      .map((run) => run.responseMs)
+      .filter((value): value is number => value !== null);
+    const latestTlsExpiry = targetRuns
+      .filter((run) => run.tlsExpiresAt)
+      .sort((a, b) => b.checkedAt.getTime() - a.checkedAt.getTime())[0]?.tlsExpiresAt;
+    return {
+      target,
+      passed: targetPassed,
+      total: targetRuns.length,
+      averageResponseMs:
+        responseTimes.length > 0
+          ? Math.round(responseTimes.reduce((sum, value) => sum + value, 0) / responseTimes.length)
+          : null,
+      tlsExpiresAt: latestTlsExpiry?.toISOString() ?? null,
+      status: targetPassed === targetRuns.length ? "Healthy" as const : "Needs attention" as const,
+    };
+  });
+  const maintenanceCoverage = maintenanceRows.map((item) => {
+    const completedCount = activityRows.filter((row) => row.maintenanceItemId === item.id).length;
+    return {
+      name: item.name,
+      category: item.category,
+      frequency: item.frequency,
+      completedCount,
+      status:
+        completedCount > 0
+          ? "completed" as const
+          : item.frequency === "as_needed"
+            ? "as_needed" as const
+            : "not_recorded" as const,
+    };
+  });
+  const completedMaintenance = maintenanceCoverage.filter((item) => item.status === "completed").length;
   const locale = normalizeLocale(client.reportLocale);
   const label = reportPeriodLabel(periodStart, workspace.timezone, locale);
+  const plannedMaintenanceNames = maintenanceCoverage.slice(0, 3).map((item) => item.name);
+  const additionalPlannedCount = Math.max(maintenanceCoverage.length - plannedMaintenanceNames.length, 0);
+  const plannedMaintenanceLabel = plannedMaintenanceNames.join(locale === "ja" ? "、" : ", ");
 
   return {
     locale,
@@ -114,33 +197,63 @@ export async function buildReportSnapshot(
     },
     executiveSummary: localized(locale, {
       en:
-        visible.length > 0
-          ? `${workspace.name} completed ${visible.length} website care ${visible.length === 1 ? "task" : "tasks"} during ${label}.`
-          : `Routine website care and public health checks were reviewed during ${label}.`,
+        `${label}: ${workspace.name} recorded ${visible.length} client-visible care ${visible.length === 1 ? "task" : "tasks"}${
+          maintenanceCoverage.length
+            ? ` and completed ${completedMaintenance} of ${maintenanceCoverage.length} configured care items`
+            : ""
+        }. ${finalRuns.length ? `${passed} of ${finalRuns.length} scheduled public checks passed.` : "No scheduled public checks were recorded."}${
+          healthStatus === "Needs attention" ? " One or more observations need attention." : ""
+        }`,
       ja:
-        visible.length > 0
-          ? `${label}は、${workspace.name}がWebサイト保守作業を${visible.length}件完了しました。`
-          : `${label}の定期保守と公開サイトの状態確認を実施しました。`,
+        `${label}は、${workspace.name}がお客様向けの定期保守作業を${visible.length}件記録しました。${
+          maintenanceCoverage.length
+            ? `設定済み保守項目${maintenanceCoverage.length}件のうち${completedMaintenance}件に実施記録があります。`
+            : ""
+        }${finalRuns.length ? `公開サイトの定期確認は${finalRuns.length}回中${passed}回成功しました。` : "公開サイトの定期確認記録はありません。"}${
+          healthStatus === "Needs attention" ? "確認が必要な観測結果があります。" : ""
+        }`,
     }),
     currentHealth: {
       passed,
       total: finalRuns.length,
       averageResponseMs,
       status: healthStatus,
+      targets,
     },
+    maintenanceCoverage,
     workCompleted: visible.map((row) => ({
       category: row.category,
       summary: row.clientSummary,
       occurredAt: row.occurredAt.toISOString(),
+      target: row.target,
+      outcomeType: row.outcomeType,
+      resultSummary: row.resultSummary,
+      verificationMethod: row.verificationMethod,
+      clientValue: row.clientValue,
     })),
-    problemsPrevented: problems.map((row) => ({
-      summary: row.clientSummary,
+    problemsPrevented: outcomes.map((row) => ({
+      summary: row.resultSummary || row.clientValue || row.clientSummary,
       occurredAt: row.occurredAt.toISOString(),
+      outcomeType: row.outcomeType,
     })),
     recommendations: recommendations.map((row) => ({
       summary: row.clientSummary,
       occurredAt: row.occurredAt.toISOString(),
+      priority: row.recommendationPriority ?? "medium",
+      nextAction: row.nextAction,
     })),
+    nextMonthPlan: localized(locale, {
+      en: maintenanceCoverage.length
+        ? `Next month: continue ${plannedMaintenanceLabel}${
+          additionalPlannedCount ? ` and ${additionalPlannedCount} more configured care ${additionalPlannedCount === 1 ? "item" : "items"}` : ""
+        }, along with scheduled public-site observations.${recommendations.length ? " Review the recorded recommendations before the next service window." : ""}`
+        : `Continue scheduled public-site observations next month.${recommendations.length ? " Review the recorded recommendations before the next service window." : ""}`,
+      ja: maintenanceCoverage.length
+        ? `翌月は${plannedMaintenanceLabel}${
+          additionalPlannedCount ? `ほか${additionalPlannedCount}件` : ""
+        }の保守予定と、公開サイトの定期確認を継続します。${recommendations.length ? "次回の保守前に記録済みの提案事項を確認します。" : ""}`
+        : `翌月も公開サイトの定期確認を継続します。${recommendations.length ? "次回の保守前に記録済みの提案事項を確認します。" : ""}`,
+    }),
     closingMessage: localized(locale, {
       en: "Everything important has been reviewed. Reply to your website care provider with any questions.",
       ja: "重要な項目はすべて確認済みです。ご不明な点はWebサイト保守担当者までお気軽にご連絡ください。",
@@ -211,10 +324,6 @@ export function renderReportHtml(snapshot: ReportSnapshot): string {
       : snapshot.currentHealth.passed === snapshot.currentHealth.total
         ? "healthy"
         : "attention";
-  const list = (items: Array<{ summary: string }>, emptyText: string, icon: "check" | "arrow") =>
-    items.length
-      ? `<ul>${items.map((item) => `<li><span class="list-icon">${icon === "check" ? "✓" : "→"}</span><p>${escapeHtml(item.summary)}</p></li>`).join("")}</ul>`
-      : `<p class="empty">${escapeHtml(emptyText)}</p>`;
   const formattedDate = (value: string) =>
     new Date(value).toLocaleDateString(locale === "ja" ? "ja-JP" : "en-US", {
       month: "short",
@@ -230,6 +339,14 @@ export function renderReportHtml(snapshot: ReportSnapshot): string {
   const healthStatus = copy.health[snapshot.currentHealth.status];
   const passedMessage = copy.passed(snapshot.currentHealth.passed, snapshot.currentHealth.total);
   const careUnit = copy.careUnit(snapshot.workCompleted.length);
+  const targets = snapshot.currentHealth.targets ?? [];
+  const maintenanceCoverage = snapshot.maintenanceCoverage ?? [];
+  const nextMonthPlan = snapshot.nextMonthPlan ?? copy.defaultNextMonth;
+  const frequencyLabel = (value: string) => copy.frequency[value as keyof typeof copy.frequency] ?? value;
+  const outcomeLabel = (value?: string) =>
+    copy.outcomes[(value ?? "work_completed") as keyof typeof copy.outcomes] ?? copy.outcomes.work_completed;
+  const priorityLabel = (value?: string) =>
+    copy.priorities[(value ?? "medium") as keyof typeof copy.priorities] ?? copy.priorities.medium;
   return `<!doctype html>
 <html lang="${locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
@@ -271,12 +388,18 @@ h1{max-width:6.8in;margin:0 0 14px;font-family:Georgia,"Times New Roman",serif;f
 .metric small{color:#657d72}.metric strong{display:block;margin-top:.12in;font-family:Georgia,serif;font-size:23px;font-weight:400;line-height:1}
 .metric strong span{font-family:Arial,sans-serif;font-size:7px;color:#73887f}.metric p{margin:7px 0 0;color:#6c8078;font-size:6.5px;line-height:1.35}
 .evidence-note{margin:8px 0 .35in;color:#89958f;font-size:5.5px;text-align:right}
+.evidence-table,.coverage-table{width:100%;margin:.18in 0 .28in;border-collapse:collapse;font-size:6.5px}
+.evidence-table th,.evidence-table td,.coverage-table th,.coverage-table td{padding:7px 6px;border-bottom:1px solid #dedfd9;text-align:left;vertical-align:top}
+.evidence-table th,.coverage-table th{color:#607a6f;font-size:5.5px;letter-spacing:.7px;text-transform:uppercase}
+.evidence-table td:first-child{max-width:2.6in;word-break:break-all}.evidence-table td:last-child,.coverage-table td:last-child{text-align:right}
+.coverage-status{font-weight:700;color:#426d5c}.coverage-status.not-recorded{color:#96624f}.coverage-status.as-needed{color:#7b8983}
 .work{break-inside:auto}
 .work-list{margin:.21in 0 0 1.55in}
 .work-item{min-height:.52in;display:grid;grid-template-columns:.34in 1fr .55in;gap:.14in;align-items:center;padding:.1in 0;border-top:1px solid #e2dfd6;break-inside:avoid}
 .work-item:last-child{border-bottom:1px solid #e2dfd6}
 .work-index{width:24px;height:24px;display:grid;place-items:center;border-radius:50%;color:#426b5c;background:#e5eee6;font-family:Georgia,serif;font-size:8px}
 .work b{display:block;color:#5c786d;text-transform:uppercase}.work h3{margin:4px 0 0;font-size:8.5px;font-weight:500;line-height:1.35}.work time{color:#7f8c87;font-size:6.5px;text-align:right}
+.work-detail{margin:4px 0 0;color:#6c7f77;font-size:6.5px;line-height:1.45}.work-detail strong{color:#47685b}
 .insights{display:grid;grid-template-columns:1fr 1fr;margin-top:.38in;break-inside:avoid}
 .insight{min-height:4.2in;padding:.5in .3in;background:#f0efe9}.insight.recommendations{color:#fff;background:#9c624e}
 .insight-title{display:flex;gap:10px;align-items:flex-start}.insight-title>span{color:#97a39e;font-family:Georgia,serif;font-size:14px}.recommendations .insight-title>span{color:#e7bdab}
@@ -286,6 +409,7 @@ h1{max-width:6.8in;margin:0 0 14px;font-family:Georgia,"Times New Roman",serif;f
 .closing{position:relative;min-height:4in;overflow:hidden;margin-top:.35in;padding:.6in .65in;display:flex;flex-direction:column;justify-content:center;text-align:center;background:#e2ece2;break-inside:avoid}
 .closing:before{content:"RP";position:absolute;left:50%;top:-.08in;color:rgba(31,80,65,.055);font-family:Georgia,serif;font-size:86px;transform:translateX(-50%)}
 .closing small,.closing h2{position:relative}.closing small{color:#5e796d}.closing h2{max-width:6.3in;margin:.13in auto 0;font-family:Georgia,serif;font-size:17px;font-weight:400;line-height:1.4}
+.next-month{margin-top:.35in;padding:.38in .45in;background:#173f36;color:#fff;break-inside:avoid}.next-month small{font-size:6px;font-weight:700;letter-spacing:1.3px;color:#9fc1b2}.next-month h2{margin:.12in 0 0;font-family:Georgia,serif;font-size:15px;font-weight:400;line-height:1.45}
 footer{min-height:.95in;display:flex;justify-content:space-between;align-items:center;padding:.14in .65in;color:#75857f;font-size:6px}
 .brand{display:flex;align-items:center;gap:7px;color:#18372f;font-size:9px;font-weight:700}.brand-mark{width:20px;height:20px;display:flex;align-items:flex-end;justify-content:center;gap:2px;padding:4px;border:1px solid #18372f;border-radius:50%}.brand-mark i{display:block;width:2px;background:#18372f;border-radius:2px}.brand-mark i:nth-child(1){height:5px}.brand-mark i:nth-child(2){height:10px}.brand-mark i:nth-child(3){height:7px}
 .footer-meta{text-align:right;line-height:1.5}
@@ -306,16 +430,19 @@ footer{min-height:.95in;display:flex;justify-content:space-between;align-items:c
     <article class="metric"><small>${copy.careCompleted}</small><strong>${snapshot.workCompleted.length}<span> ${careUnit}</span></strong><p>${copy.clientVisibleWork}</p></article>
   </section>
   <p class="evidence-note">${copy.evidenceNote}</p>
+  ${targets.length ? `<table class="evidence-table"><thead><tr><th>${copy.target}</th><th>${copy.observations}</th><th>${copy.response}</th><th>${copy.ssl}</th></tr></thead><tbody>${targets.map((item) => `<tr><td>${escapeHtml(item.target)}</td><td>${item.passed} / ${item.total}</td><td>${item.averageResponseMs === null ? "—" : `${item.averageResponseMs} ms`}</td><td>${item.tlsExpiresAt ? escapeHtml(new Date(item.tlsExpiresAt).toLocaleDateString(locale === "ja" ? "ja-JP" : "en-US", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" })) : copy.sslVerifiedOnly}</td></tr>`).join("")}</tbody></table>` : ""}
+  ${maintenanceCoverage.length ? `<table class="coverage-table"><thead><tr><th>${copy.careItem}</th><th>${copy.frequencyLabel}</th><th>${copy.recorded}</th><th>${copy.coverageStatus}</th></tr></thead><tbody>${maintenanceCoverage.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(frequencyLabel(item.frequency))}</td><td>${item.completedCount}</td><td><span class="coverage-status ${item.status.replace("_", "-")}">${copy.coverage[item.status]}</span></td></tr>`).join("")}</tbody></table>` : ""}
   <section class="work">
     <div class="section-heading"><span>02</span><div><small>${copy.workCompleted}</small><p>${copy.careBehind}</p></div></div>
     <div class="work-list">${snapshot.workCompleted.length
-      ? snapshot.workCompleted.map((item, index) => `<article class="work-item"><span class="work-index">${String(index + 1).padStart(2, "0")}</span><div><b>${escapeHtml(categoryLabel(item.category, locale))}</b><h3>${escapeHtml(item.summary)}</h3></div><time>${escapeHtml(formattedDate(item.occurredAt))}</time></article>`).join("")
+      ? snapshot.workCompleted.map((item, index) => `<article class="work-item"><span class="work-index">${String(index + 1).padStart(2, "0")}</span><div><b>${escapeHtml(categoryLabel(item.category, locale))} · ${escapeHtml(outcomeLabel(item.outcomeType))}</b><h3>${escapeHtml(item.summary)}</h3>${item.target ? `<p class="work-detail"><strong>${copy.target}:</strong> ${escapeHtml(item.target)}</p>` : ""}${item.resultSummary ? `<p class="work-detail"><strong>${copy.result}:</strong> ${escapeHtml(item.resultSummary)}</p>` : ""}${item.verificationMethod ? `<p class="work-detail"><strong>${copy.verification}:</strong> ${escapeHtml(item.verificationMethod)}</p>` : ""}${item.clientValue ? `<p class="work-detail"><strong>${copy.clientValue}:</strong> ${escapeHtml(item.clientValue)}</p>` : ""}</div><time>${escapeHtml(formattedDate(item.occurredAt))}</time></article>`).join("")
       : `<p class="empty">${copy.noWork}</p>`}</div>
   </section>
   <section class="insights">
-    <article class="insight"><div class="insight-title"><span>03</span><small>${copy.problemsPrevented}</small></div>${list(snapshot.problemsPrevented, copy.noProblems, "check")}</article>
-    <article class="insight recommendations"><div class="insight-title"><span>04</span><small>${copy.recommendations}</small></div>${list(snapshot.recommendations, copy.noRecommendations, "arrow")}</article>
+    <article class="insight"><div class="insight-title"><span>03</span><small>${copy.problemsPrevented}</small></div>${snapshot.problemsPrevented.length ? `<ul>${snapshot.problemsPrevented.map((item) => `<li><span class="list-icon">✓</span><p><strong>${escapeHtml(outcomeLabel(item.outcomeType))}</strong><br>${escapeHtml(item.summary)}</p></li>`).join("")}</ul>` : `<p class="empty">${copy.noProblems}</p>`}</article>
+    <article class="insight recommendations"><div class="insight-title"><span>04</span><small>${copy.recommendations}</small></div>${snapshot.recommendations.length ? `<ul>${snapshot.recommendations.map((item) => `<li><span class="list-icon">→</span><p><strong>${escapeHtml(priorityLabel(item.priority))}</strong><br>${escapeHtml(item.summary)}${item.nextAction ? `<br><em>${copy.nextAction}: ${escapeHtml(item.nextAction)}</em>` : ""}</p></li>`).join("")}</ul>` : `<p class="empty">${copy.noRecommendations}</p>`}</article>
   </section>
+  <section class="next-month"><small>${copy.nextMonth}</small><h2>${escapeHtml(nextMonthPlan)}</h2></section>
   <section class="closing"><small>${copy.closingNote}</small><h2>${escapeHtml(snapshot.closingMessage)}</h2></section>
 </div>
 <footer><div class="brand"><span class="brand-mark"><i></i><i></i><i></i></span>${escapeHtml(snapshot.appName)}</div><div class="footer-meta">${copy.footerLine}<br>${copy.generated} ${escapeHtml(generatedDate)}</div></footer>
@@ -336,13 +463,28 @@ const reportCopy = {
     careCompleted: "CARE COMPLETED",
     clientVisibleWork: "Client-visible work recorded",
     evidenceNote: "Scheduled observations only. This report does not estimate uptime or guarantee availability.",
+    target: "Target",
+    observations: "Checks passed",
+    response: "Average response",
+    ssl: "SSL certificate",
+    sslVerifiedOnly: "Valid when checked; expiry unavailable",
+    careItem: "Care item",
+    frequencyLabel: "Frequency",
+    recorded: "Records",
+    coverageStatus: "Status",
+    result: "Result",
+    verification: "Verified by",
+    clientValue: "Client value",
     workCompleted: "WORK COMPLETED",
     careBehind: "The care behind the result",
     noWork: "No client-visible maintenance activities were recorded in this period.",
-    problemsPrevented: "PROBLEMS PREVENTED",
-    noProblems: "No preventable issues were recorded.",
+    problemsPrevented: "OUTCOMES & VERIFICATION",
+    noProblems: "No separately classified outcomes were recorded.",
     recommendations: "RECOMMENDATIONS",
     noRecommendations: "No recommendations this month.",
+    nextAction: "Next action",
+    nextMonth: "NEXT MONTH",
+    defaultNextMonth: "Continue the configured care schedule and public-site observations next month.",
     closingNote: "CLOSING NOTE",
     footerLine: "Client-visible website care",
     generated: "Generated",
@@ -353,6 +495,29 @@ const reportCopy = {
     },
     passed: (passed: number, total: number) => `${passed} of ${total} scheduled checks passed`,
     careUnit: (count: number) => (count === 1 ? "item" : "items"),
+    frequency: {
+      daily: "Daily",
+      weekly: "Weekly",
+      monthly: "Monthly",
+      quarterly: "Quarterly",
+      as_needed: "As needed",
+    },
+    coverage: {
+      completed: "Recorded",
+      not_recorded: "No activity recorded",
+      as_needed: "As needed",
+    },
+    outcomes: {
+      work_completed: "Work completed",
+      issue_resolved: "Issue resolved",
+      risk_reduced: "Risk reduced",
+      routine_verification: "Routine verification",
+    },
+    priorities: {
+      low: "Low priority",
+      medium: "Medium priority",
+      high: "High priority",
+    },
   },
   ja: {
     recordTitle: "WEBサイト保守 / 月次レポート",
@@ -367,13 +532,28 @@ const reportCopy = {
     careCompleted: "完了した保守",
     clientVisibleWork: "お客様向けに記録された作業",
     evidenceNote: "定期確認の観測結果のみを掲載しています。稼働率の推定や可用性の保証を行うものではありません。",
+    target: "確認対象",
+    observations: "確認成功数",
+    response: "平均応答",
+    ssl: "SSL証明書",
+    sslVerifiedOnly: "確認時は有効・期限未取得",
+    careItem: "保守項目",
+    frequencyLabel: "頻度",
+    recorded: "記録数",
+    coverageStatus: "状態",
+    result: "結果",
+    verification: "確認方法",
+    clientValue: "お客様への価値",
     workCompleted: "完了した作業",
     careBehind: "結果を支える保守内容",
     noWork: "この期間にお客様向けの保守作業記録はありません。",
-    problemsPrevented: "問題の予防",
-    noProblems: "予防対応として記録された項目はありません。",
+    problemsPrevented: "成果と確認",
+    noProblems: "区分された成果・確認記録はありません。",
     recommendations: "今後のご提案",
     noRecommendations: "今月のご提案はありません。",
+    nextAction: "次のアクション",
+    nextMonth: "翌月の予定",
+    defaultNextMonth: "翌月も設定済みの保守予定と公開サイトの定期確認を継続します。",
     closingNote: "おわりに",
     footerLine: "見えるかたちで届けるWebサイト保守",
     generated: "作成日",
@@ -384,6 +564,29 @@ const reportCopy = {
     },
     passed: (passed: number, total: number) => `${total}回中${passed}回の定期確認に成功`,
     careUnit: () => "件",
+    frequency: {
+      daily: "毎日",
+      weekly: "毎週",
+      monthly: "毎月",
+      quarterly: "四半期",
+      as_needed: "必要時",
+    },
+    coverage: {
+      completed: "実施記録あり",
+      not_recorded: "記録なし",
+      as_needed: "必要時",
+    },
+    outcomes: {
+      work_completed: "作業完了",
+      issue_resolved: "問題解決",
+      risk_reduced: "リスク低減",
+      routine_verification: "定期確認",
+    },
+    priorities: {
+      low: "優先度：低",
+      medium: "優先度：中",
+      high: "優先度：高",
+    },
   },
 } as const;
 

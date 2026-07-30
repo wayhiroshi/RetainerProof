@@ -1,5 +1,6 @@
 import { and, eq, lte } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
+import { connect as connectTls } from "node:tls";
 import { checkRuns, clients, managedAssets, user, workspaceMembers } from "../db/schema";
 import { escapeHtml, sendTransactionalEmail } from "../lib/email";
 import { assertPublicHttpUrl, UnsafeUrlError } from "../lib/url-security";
@@ -15,6 +16,7 @@ interface CheckResult {
   status: "passed" | "failed";
   statusCode: number | null;
   responseMs: number | null;
+  tlsExpiresAt: Date | null;
   errorCode: string | null;
 }
 
@@ -61,6 +63,7 @@ export async function processMonitorMessage(env: Env, message: MonitorMessage): 
         status: result.status,
         statusCode: result.statusCode,
         responseMs: result.responseMs,
+        tlsExpiresAt: result.tlsExpiresAt,
         errorCode: result.errorCode,
         attempt: message.attempt,
         checkedAt,
@@ -140,11 +143,13 @@ export async function checkTarget(rawUrl: string): Promise<CheckResult> {
         current = await assertPublicHttpUrl(new URL(location, current).toString());
         continue;
       }
+      const tlsExpiresAt = await inspectTlsExpiry(current);
       return {
         target: rawUrl,
         status: response.ok ? "passed" : "failed",
         statusCode: response.status,
         responseMs: Date.now() - started,
+        tlsExpiresAt,
         errorCode: response.ok ? null : `HTTP_${response.status}`,
       };
     }
@@ -161,9 +166,43 @@ export async function checkTarget(rawUrl: string): Promise<CheckResult> {
       status: "failed",
       statusCode: null,
       responseMs: Date.now() - started,
+      tlsExpiresAt: null,
       errorCode: code,
     };
   }
+}
+
+async function inspectTlsExpiry(url: URL): Promise<Date | null> {
+  if (url.protocol !== "https:") return null;
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value: Date | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    try {
+      const socket = connectTls(
+        {
+          host: url.hostname,
+          port: url.port ? Number(url.port) : 443,
+          servername: url.hostname,
+          rejectUnauthorized: true,
+        },
+        () => {
+          const certificate = socket.getPeerCertificate();
+          const expiresAt = certificate.valid_to ? new Date(certificate.valid_to) : null;
+          socket.destroy();
+          finish(expiresAt && !Number.isNaN(expiresAt.getTime()) ? expiresAt : null);
+        },
+      );
+      socket.setTimeout(8_000, () => socket.destroy(new Error("TLS_TIMEOUT")));
+      socket.once("error", () => finish(null));
+      socket.once("close", () => finish(null));
+    } catch {
+      finish(null);
+    }
+  });
 }
 
 function safeJsonStringArray(value: string): string[] {

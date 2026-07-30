@@ -1,4 +1,4 @@
-import { and, count, desc, eq } from "drizzle-orm";
+import { and, asc, count, desc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { Hono } from "hono";
 import { z } from "zod";
@@ -7,6 +7,7 @@ import {
   activities,
   aiRewrites,
   clients,
+  maintenanceItems,
   managedAssets,
   reportDeliveries,
   reportRevisions,
@@ -94,14 +95,32 @@ app.get("/api/public/reports/:token", async (c) => {
           en: `${snapshot.currentHealth.passed} of ${snapshot.currentHealth.total} scheduled checks passed`,
           ja: `${snapshot.currentHealth.total}回中${snapshot.currentHealth.passed}回の定期確認に成功`,
         }),
+        targets: snapshot.currentHealth.targets ?? [],
       },
+      maintenanceCoverage: snapshot.maintenanceCoverage ?? [],
       workCompleted: snapshot.workCompleted.map((item) => ({
         category: item.category,
         description: item.summary,
         date: item.occurredAt,
+        target: item.target ?? "",
+        outcomeType: item.outcomeType ?? "work_completed",
+        resultSummary: item.resultSummary ?? "",
+        verificationMethod: item.verificationMethod ?? "",
+        clientValue: item.clientValue ?? "",
       })),
-      problemsPrevented: snapshot.problemsPrevented.map((item) => item.summary),
-      recommendations: snapshot.recommendations.map((item) => item.summary),
+      problemsPrevented: snapshot.problemsPrevented.map((item) => ({
+        summary: item.summary,
+        outcomeType: item.outcomeType ?? "routine_verification",
+      })),
+      recommendations: snapshot.recommendations.map((item) => ({
+        summary: item.summary,
+        priority: item.priority ?? "medium",
+        nextAction: item.nextAction ?? "",
+      })),
+      nextMonthPlan: snapshot.nextMonthPlan ?? localized(locale, {
+        en: "Continue the configured care schedule and public-site observations next month.",
+        ja: "翌月も設定済みの保守予定と公開サイトの定期確認を継続します。",
+      }),
       closingMessage: snapshot.closingMessage,
     },
   });
@@ -180,24 +199,31 @@ app.patch("/api/me/locale", async (c) => {
 app.get("/api/clients", async (c) => {
   const db = drizzle(c.env.DB);
   const workspaceId = c.get("workspace").id;
-  const rows = await db
-    .select({
-      id: clients.id,
-      name: clients.name,
-      contactName: clients.contactName,
-      contactEmail: clients.contactEmail,
-      reportLocale: clients.reportLocale,
-      status: clients.status,
-      assetId: managedAssets.id,
-      assetName: managedAssets.name,
-      url: managedAssets.url,
-      criticalUrlsJson: managedAssets.criticalUrlsJson,
-      nextCheckAt: managedAssets.nextCheckAt,
-    })
-    .from(clients)
-    .leftJoin(managedAssets, eq(managedAssets.clientId, clients.id))
-    .where(eq(clients.workspaceId, workspaceId))
-    .orderBy(desc(clients.createdAt));
+  const [rows, careItems] = await Promise.all([
+    db
+      .select({
+        id: clients.id,
+        name: clients.name,
+        contactName: clients.contactName,
+        contactEmail: clients.contactEmail,
+        reportLocale: clients.reportLocale,
+        status: clients.status,
+        assetId: managedAssets.id,
+        assetName: managedAssets.name,
+        url: managedAssets.url,
+        criticalUrlsJson: managedAssets.criticalUrlsJson,
+        nextCheckAt: managedAssets.nextCheckAt,
+      })
+      .from(clients)
+      .leftJoin(managedAssets, eq(managedAssets.clientId, clients.id))
+      .where(eq(clients.workspaceId, workspaceId))
+      .orderBy(desc(clients.createdAt)),
+    db
+      .select()
+      .from(maintenanceItems)
+      .where(eq(maintenanceItems.workspaceId, workspaceId))
+      .orderBy(asc(maintenanceItems.sortOrder), asc(maintenanceItems.createdAt)),
+  ]);
   return c.json({
     clients: rows.map((row) => ({
       id: row.id,
@@ -205,6 +231,7 @@ app.get("/api/clients", async (c) => {
       contactName: row.contactName,
       contactEmail: row.contactEmail,
       reportLocale: row.reportLocale,
+      maintenanceItems: careItems.filter((item) => item.clientId === row.id),
       asset: row.assetId
         ? {
             id: row.assetId,
@@ -234,6 +261,7 @@ app.post("/api/clients", async (c) => {
   const clientId = crypto.randomUUID();
   const serviceId = crypto.randomUUID();
   const assetId = crypto.randomUUID();
+  const defaultCareItems = defaultMaintenanceItems(input.reportLocale);
   await db.batch([
     db.insert(clients).values({
       id: clientId,
@@ -266,6 +294,17 @@ app.post("/api/clients", async (c) => {
       createdAt: now,
       updatedAt: now,
     }),
+    db.insert(maintenanceItems).values(
+      defaultCareItems.map((item, index) => ({
+        id: crypto.randomUUID(),
+        workspaceId,
+        clientId,
+        ...item,
+        sortOrder: index,
+        createdAt: now,
+        updatedAt: now,
+      })),
+    ),
     db
       .update(workspaces)
       .set({ timezone: input.timezone, updatedAt: now })
@@ -286,6 +325,51 @@ app.patch("/api/clients/:id/report-locale", async (c) => {
   return c.json({ locale: input.locale });
 });
 
+app.post("/api/clients/:id/maintenance-items", async (c) => {
+  const input = maintenanceItemInputSchema.parse(await c.req.json());
+  const workspaceId = c.get("workspace").id;
+  const clientId = c.req.param("id");
+  await assertClientBelongsToWorkspace(c.env, workspaceId, clientId);
+  const db = drizzle(c.env.DB);
+  const id = crypto.randomUUID();
+  const now = new Date();
+  await db.insert(maintenanceItems).values({
+    id,
+    workspaceId,
+    clientId,
+    name: input.name,
+    category: input.category,
+    frequency: input.frequency,
+    enabled: true,
+    sortOrder: input.sortOrder,
+    createdAt: now,
+    updatedAt: now,
+  });
+  return c.json({ id }, 201);
+});
+
+app.patch("/api/maintenance-items/:id", async (c) => {
+  const input = maintenanceItemUpdateSchema.parse(await c.req.json());
+  const workspaceId = c.get("workspace").id;
+  const db = drizzle(c.env.DB);
+  const result = await db
+    .update(maintenanceItems)
+    .set({ ...input, updatedAt: new Date() })
+    .where(and(eq(maintenanceItems.id, c.req.param("id")), eq(maintenanceItems.workspaceId, workspaceId)));
+  if (!result.meta.changes) return c.json({ error: "MAINTENANCE_ITEM_NOT_FOUND" }, 404);
+  return c.json({ updated: true });
+});
+
+app.delete("/api/maintenance-items/:id", async (c) => {
+  const workspaceId = c.get("workspace").id;
+  const db = drizzle(c.env.DB);
+  const result = await db
+    .delete(maintenanceItems)
+    .where(and(eq(maintenanceItems.id, c.req.param("id")), eq(maintenanceItems.workspaceId, workspaceId)));
+  if (!result.meta.changes) return c.json({ error: "MAINTENANCE_ITEM_NOT_FOUND" }, 404);
+  return c.json({ deleted: true });
+});
+
 app.get("/api/activities", async (c) => {
   const db = drizzle(c.env.DB);
   const workspaceId = c.get("workspace").id;
@@ -300,8 +384,16 @@ app.get("/api/activities", async (c) => {
       clientName: clients.name,
       occurredAt: activities.occurredAt,
       category: activities.category,
+      maintenanceItemId: activities.maintenanceItemId,
+      target: activities.target,
+      outcomeType: activities.outcomeType,
       internalNote: activities.internalNote,
       clientDescription: activities.clientSummary,
+      resultSummary: activities.resultSummary,
+      verificationMethod: activities.verificationMethod,
+      clientValue: activities.clientValue,
+      recommendationPriority: activities.recommendationPriority,
+      nextAction: activities.nextAction,
       visibility: activities.visibility,
     })
     .from(activities)
@@ -320,6 +412,21 @@ app.post("/api/activities", async (c) => {
   const template = quickTemplates[reportLocale][input.category];
   const clientSummary = input.clientDescription.trim() || template;
   const db = drizzle(c.env.DB);
+  if (input.maintenanceItemId) {
+    const careItem = await db
+      .select({ clientId: maintenanceItems.clientId })
+      .from(maintenanceItems)
+      .where(
+        and(
+          eq(maintenanceItems.id, input.maintenanceItemId),
+          eq(maintenanceItems.workspaceId, workspaceId),
+        ),
+      )
+      .get();
+    if (!careItem || careItem.clientId !== input.clientId) {
+      return c.json({ error: "MAINTENANCE_ITEM_NOT_FOUND" }, 404);
+    }
+  }
   const id = crypto.randomUUID();
   await db.insert(activities).values({
     id,
@@ -329,8 +436,16 @@ app.post("/api/activities", async (c) => {
     occurredAt: input.occurredAt ? new Date(input.occurredAt) : new Date(),
     category: input.category,
     visibility: input.visibility,
+    maintenanceItemId: input.maintenanceItemId || null,
+    target: input.target,
+    outcomeType: input.outcomeType,
     internalNote: input.internalNote,
     clientSummary,
+    resultSummary: input.resultSummary,
+    verificationMethod: input.verificationMethod,
+    clientValue: input.clientValue,
+    recommendationPriority: input.visibility === "recommendation" ? input.recommendationPriority : null,
+    nextAction: input.visibility === "recommendation" ? input.nextAction : "",
     createdAt: new Date(),
     updatedAt: new Date(),
   });
@@ -475,6 +590,7 @@ app.put("/api/reports/:id", async (c) => {
     workCompleted: input.workCompleted,
     problemsPrevented: input.problemsPrevented,
     recommendations: input.recommendations,
+    nextMonthPlan: input.nextMonthPlan,
     closingMessage: input.closingMessage,
     generatedAt: new Date().toISOString(),
   };
@@ -571,7 +687,14 @@ app.notFound((c) => c.env.ASSETS.fetch(c.req.raw));
 app.onError((error, c) => {
   const code = error instanceof z.ZodError ? "VALIDATION_ERROR" : error instanceof Error ? error.message : "INTERNAL_ERROR";
   console.error(JSON.stringify({ event: "request_error", path: c.req.path, code }));
-  return c.json({ error: code }, code === "VALIDATION_ERROR" ? 400 : 500);
+  const status = code === "VALIDATION_ERROR"
+    ? 400
+    : code === "CLIENT_NOT_FOUND" || code === "REPORT_NOT_FOUND"
+      ? 404
+      : code === "FINALIZED_REPORT_IMMUTABLE"
+        ? 409
+        : 500;
+  return c.json({ error: code }, status);
 });
 
 export default {
@@ -609,14 +732,38 @@ const clientInputSchema = z.object({
 });
 
 const categories = ["updates", "backups", "security", "fixes", "content", "performance", "forms", "support", "other"] as const;
+const maintenanceFrequencies = ["daily", "weekly", "monthly", "quarterly", "as_needed"] as const;
+const outcomeTypes = ["work_completed", "issue_resolved", "risk_reduced", "routine_verification"] as const;
+const recommendationPriorities = ["low", "medium", "high"] as const;
+const maintenanceItemInputSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  category: z.enum(categories),
+  frequency: z.enum(maintenanceFrequencies),
+  sortOrder: z.number().int().min(0).max(1_000).optional().default(0),
+});
+const maintenanceItemUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  category: z.enum(categories).optional(),
+  frequency: z.enum(maintenanceFrequencies).optional(),
+  enabled: z.boolean().optional(),
+  sortOrder: z.number().int().min(0).max(1_000).optional(),
+}).refine((input) => Object.keys(input).length > 0);
 const activityInputSchema = z.object({
   clientId: z.string().min(1),
   assetId: z.string().optional().default(""),
+  maintenanceItemId: z.string().optional().default(""),
   occurredAt: z.iso.datetime().optional(),
   category: z.enum(categories),
   visibility: z.enum(["client_visible", "internal_only", "recommendation"]),
+  target: z.string().trim().max(300).optional().default(""),
+  outcomeType: z.enum(outcomeTypes).optional().default("work_completed"),
   internalNote: z.string().trim().max(2_000).optional().default(""),
   clientDescription: z.string().trim().max(500).optional().default(""),
+  resultSummary: z.string().trim().max(500).optional().default(""),
+  verificationMethod: z.string().trim().max(500).optional().default(""),
+  clientValue: z.string().trim().max(500).optional().default(""),
+  recommendationPriority: z.enum(recommendationPriorities).optional().default("medium"),
+  nextAction: z.string().trim().max(500).optional().default(""),
   aiRewriteId: z.string().min(1).optional(),
 });
 const rewriteInputSchema = z.object({
@@ -639,10 +786,23 @@ const reportEditSchema = z.object({
   workCompleted: z.array(
     reportItemSchema.extend({
       category: z.string().trim().min(1).max(80),
+      target: z.string().trim().max(300).optional(),
+      outcomeType: z.enum(outcomeTypes).optional(),
+      resultSummary: z.string().trim().max(500).optional(),
+      verificationMethod: z.string().trim().max(500).optional(),
+      clientValue: z.string().trim().max(500).optional(),
     }),
   ).max(200),
-  problemsPrevented: z.array(reportItemSchema).max(200),
-  recommendations: z.array(reportItemSchema).max(200),
+  problemsPrevented: z.array(
+    reportItemSchema.extend({ outcomeType: z.enum(outcomeTypes).optional() }),
+  ).max(200),
+  recommendations: z.array(
+    reportItemSchema.extend({
+      priority: z.enum(recommendationPriorities).optional(),
+      nextAction: z.string().trim().max(500).optional(),
+    }),
+  ).max(200),
+  nextMonthPlan: z.string().trim().min(1).max(2_000),
   closingMessage: z.string().trim().min(1).max(2_000),
 });
 const finalizeSchema = z.object({
@@ -677,6 +837,24 @@ const quickTemplates: Record<"en" | "ja", Record<(typeof categories)[number], st
     other: "記録されたWebサイト保守作業を完了しました。",
   },
 };
+
+function defaultMaintenanceItems(locale: "en" | "ja") {
+  return locale === "ja"
+    ? [
+        { name: "公開サイト確認", category: "support" as const, frequency: "daily" as const },
+        { name: "ソフトウェア更新", category: "updates" as const, frequency: "monthly" as const },
+        { name: "バックアップ準備確認", category: "backups" as const, frequency: "monthly" as const },
+        { name: "セキュリティ確認", category: "security" as const, frequency: "monthly" as const },
+        { name: "フォーム・主要機能確認", category: "forms" as const, frequency: "monthly" as const },
+      ]
+    : [
+        { name: "Public site checks", category: "support" as const, frequency: "daily" as const },
+        { name: "Software updates", category: "updates" as const, frequency: "monthly" as const },
+        { name: "Backup readiness review", category: "backups" as const, frequency: "monthly" as const },
+        { name: "Security review", category: "security" as const, frequency: "monthly" as const },
+        { name: "Forms and key-function review", category: "forms" as const, frequency: "monthly" as const },
+      ];
+}
 
 const maxReportPdfBytes = 10 * 1024 * 1024;
 
