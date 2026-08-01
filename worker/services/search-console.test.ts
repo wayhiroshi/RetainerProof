@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  chunkSearchConsoleMetricRows,
   decryptGoogleToken,
   encryptGoogleToken,
   normalizeSearchKeyword,
@@ -41,5 +42,17 @@ describe("Search Console token storage", () => {
 describe("normalizeSearchKeyword", () => {
   it("normalizes width, whitespace, and case for duplicate detection", () => {
     expect(normalizeSearchKeyword("  ＷＥＢ   Maintenance  ")).toBe("web maintenance");
+  });
+});
+
+describe("Search Console D1 writes", () => {
+  it("chunks metric inserts below D1's 100 bound-parameter limit", () => {
+    const rows = Array.from({ length: 30 }, (_, index) => index);
+
+    expect(chunkSearchConsoleMetricRows(rows)).toEqual([
+      rows.slice(0, 10),
+      rows.slice(10, 20),
+      rows.slice(20, 30),
+    ]);
   });
 });

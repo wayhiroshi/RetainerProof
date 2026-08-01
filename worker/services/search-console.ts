@@ -15,6 +15,7 @@ const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke";
 const SEARCH_CONSOLE_API = "https://www.googleapis.com/webmasters/v3";
+const D1_METRIC_INSERT_CHUNK_SIZE = 10;
 
 const tokenResponseSchema = z.object({
   access_token: z.string().min(1),
@@ -314,19 +315,20 @@ export async function syncClientSearchConsole(
           lte(searchConsoleDailyMetrics.metricDate, endDate),
         ));
       if (rows.length) {
-        await db.insert(searchConsoleDailyMetrics).values(
-          rows.map((row) => ({
-            id: crypto.randomUUID(),
-            workspaceId,
-            keywordId: keyword.id,
-            metricDate: row.keys[0],
-            clicks: row.clicks,
-            impressions: row.impressions,
-            ctr: row.ctr,
-            position: row.position,
-            fetchedAt,
-          })),
-        );
+        const metricRows = rows.map((row) => ({
+          id: crypto.randomUUID(),
+          workspaceId,
+          keywordId: keyword.id,
+          metricDate: row.keys[0],
+          clicks: row.clicks,
+          impressions: row.impressions,
+          ctr: row.ctr,
+          position: row.position,
+          fetchedAt,
+        }));
+        for (const chunk of chunkSearchConsoleMetricRows(metricRows)) {
+          await db.insert(searchConsoleDailyMetrics).values(chunk);
+        }
       }
       rowCount += rows.length;
     }
@@ -349,6 +351,14 @@ export async function syncClientSearchConsole(
       ));
     throw error;
   }
+}
+
+export function chunkSearchConsoleMetricRows<T>(rows: T[]): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < rows.length; index += D1_METRIC_INSERT_CHUNK_SIZE) {
+    chunks.push(rows.slice(index, index + D1_METRIC_INSERT_CHUNK_SIZE));
+  }
+  return chunks;
 }
 
 export async function enqueueDueSearchConsoleSyncs(env: Env): Promise<number> {
