@@ -74,6 +74,7 @@ export async function buildReportSnapshot(
   clientId: string,
   periodStart: Date,
   periodEnd: Date,
+  localeOverride?: Locale,
 ): Promise<ReportSnapshot> {
   const db = drizzle(env.DB);
   const [client, workspace, activityRows, runRows, maintenanceRows] = await Promise.all([
@@ -185,7 +186,7 @@ export async function buildReportSnapshot(
     };
   });
   const completedMaintenance = maintenanceCoverage.filter((item) => item.status === "completed").length;
-  const locale = normalizeLocale(client.reportLocale);
+  const locale = normalizeLocale(localeOverride ?? client.reportLocale);
   const label = reportPeriodLabel(periodStart, workspace.timezone, locale);
   const searchPerformance = await buildSearchPerformanceSnapshot(env, {
     workspaceId,
@@ -326,6 +327,50 @@ export async function saveDraft(
     snapshotJson: JSON.stringify(snapshot),
     createdAt: now,
   });
+  return { reportId, revision, snapshot };
+}
+
+export async function saveCorrectionDraft(
+  env: Env,
+  workspaceId: string,
+  reportId: string,
+  snapshot: ReportSnapshot,
+) {
+  const db = drizzle(env.DB);
+  const existing = await db
+    .select({
+      currentRevision: reports.currentRevision,
+      status: reports.status,
+    })
+    .from(reports)
+    .where(and(eq(reports.id, reportId), eq(reports.workspaceId, workspaceId)))
+    .get();
+  if (!existing) throw new Error("REPORT_NOT_FOUND");
+  if (existing.status === "draft") throw new Error("REPORT_ALREADY_DRAFT");
+
+  const revision = existing.currentRevision + 1;
+  const now = new Date();
+  await db.batch([
+    db.insert(reportRevisions).values({
+      id: crypto.randomUUID(),
+      workspaceId,
+      reportId,
+      revision,
+      snapshotJson: JSON.stringify(snapshot),
+      createdAt: now,
+    }),
+    db
+      .update(reports)
+      .set({
+        currentRevision: revision,
+        status: "draft",
+        shareTokenHash: null,
+        firstViewedAt: null,
+        finalizedAt: null,
+        updatedAt: now,
+      })
+      .where(and(eq(reports.id, reportId), eq(reports.workspaceId, workspaceId))),
+  ]);
   return { reportId, revision, snapshot };
 }
 

@@ -34,7 +34,13 @@ import {
   handleStripeWebhook,
 } from "./services/billing";
 import { enqueueDueChecks, type MonitorMessage, processMonitorMessage } from "./services/monitoring";
-import { buildReportSnapshot, renderReportHtml, saveDraft, type ReportSnapshot } from "./services/reports";
+import {
+  buildReportSnapshot,
+  renderReportHtml,
+  saveCorrectionDraft,
+  saveDraft,
+  type ReportSnapshot,
+} from "./services/reports";
 import { purgeDueWorkspaceData } from "./services/deletion";
 import {
   completeSearchConsoleAuthorization,
@@ -811,6 +817,40 @@ app.post("/api/reports/draft", async (c) => {
   return c.json(await saveDraft(c.env, workspaceId, input.clientId, start, end, snapshot), 201);
 });
 
+app.post("/api/reports/:id/correction", async (c) => {
+  const db = drizzle(c.env.DB);
+  const workspaceId = c.get("workspace").id;
+  const reportId = c.req.param("id");
+  const row = await db
+    .select({
+      clientId: reports.clientId,
+      periodStart: reports.periodStart,
+      periodEnd: reports.periodEnd,
+      status: reports.status,
+      snapshotJson: reportRevisions.snapshotJson,
+    })
+    .from(reports)
+    .innerJoin(
+      reportRevisions,
+      and(eq(reportRevisions.reportId, reports.id), eq(reportRevisions.revision, reports.currentRevision)),
+    )
+    .where(and(eq(reports.id, reportId), eq(reports.workspaceId, workspaceId)))
+    .get();
+  if (!row) return c.json({ error: "REPORT_NOT_FOUND" }, 404);
+  if (row.status === "draft") return c.json({ error: "REPORT_ALREADY_DRAFT" }, 409);
+
+  const current = JSON.parse(row.snapshotJson) as ReportSnapshot;
+  const snapshot = await buildReportSnapshot(
+    c.env,
+    workspaceId,
+    row.clientId,
+    row.periodStart,
+    row.periodEnd,
+    normalizeLocale(current.locale),
+  );
+  return c.json(await saveCorrectionDraft(c.env, workspaceId, reportId, snapshot), 201);
+});
+
 app.put("/api/reports/:id", async (c) => {
   const input = reportEditSchema.parse(await c.req.json());
   const db = drizzle(c.env.DB);
@@ -944,6 +984,7 @@ app.onError((error, c) => {
         code === "SEARCH_CONSOLE_KEYWORD_NOT_FOUND"
       ? 404
       : code === "FINALIZED_REPORT_IMMUTABLE" ||
+          code === "REPORT_ALREADY_DRAFT" ||
           code === "GOOGLE_REAUTH_REQUIRED" ||
           code === "SEARCH_CONSOLE_KEYWORD_EXISTS" ||
           code === "SEARCH_CONSOLE_KEYWORD_LIMIT_REACHED"

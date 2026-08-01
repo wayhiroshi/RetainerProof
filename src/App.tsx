@@ -76,7 +76,7 @@ type Report = {
   clientName: string;
   periodStart: string;
   periodEnd: string;
-  status: "draft" | "finalized";
+  status: "draft" | "finalized" | "revoked";
   updatedAt: string;
   finalizedAt: string | null;
   firstViewedAt: string | null;
@@ -1848,16 +1848,7 @@ function ReportsPage() {
     const confirmed = window.confirm(tr(locale, "Revoke the current share link and create a new draft Revision? The finalized snapshot remains in history.", "現在の共有リンクを失効し、新しい下書きを作成しますか？確定済みの版は履歴に残ります。"));
     if (!confirmed) return;
     try {
-      await api(`/api/reports/${report.id}/revoke`, { method: "POST" });
-      await api("/api/reports/draft", {
-        method: "POST",
-        body: JSON.stringify({
-          clientId: report.clientId,
-          periodStart: report.periodStart.slice(0, 10),
-          periodEnd: report.periodEnd.slice(0, 10),
-          locale: report.locale ?? "en",
-        }),
-      });
+      await api(`/api/reports/${report.id}/correction`, { method: "POST" });
       load();
     } catch (caught) {
       window.alert(caught instanceof Error ? caught.message : tr(locale, "Could not create a correction revision.", "修正版の下書きを作成できませんでした。"));
@@ -1893,7 +1884,11 @@ function ReportsPage() {
               <article key={report.id}>
                 <span className="report-doc"><Icon name="report" /></span>
                 <div><h3>{report.clientName}</h3><p>{report.periodLabel} · {tr(locale, "Revision", "版")} {report.latestRevisionNumber} · {report.locale === "ja" ? "日本語" : "English"}</p></div>
-                <span className={`report-status ${report.status}`}>{tr(locale, report.status, report.status === "draft" ? "下書き" : "確定済み")}</span>
+                <span className={`report-status ${report.status}`}>{tr(
+                  locale,
+                  report.status,
+                  report.status === "draft" ? "下書き" : report.status === "revoked" ? "失効済み" : "確定済み",
+                )}</span>
                 {report.status === "draft" ? <button className="button button-small" onClick={() => review(report)}>{tr(locale, "Review & finalize", "確認して確定")}</button> : (
                   <div className="report-final-actions">
                     <span className="view-status">{report.firstViewedAt ? tr(locale, "Viewed", "閲覧済み") : tr(locale, "Not viewed yet", "未閲覧")}</span>

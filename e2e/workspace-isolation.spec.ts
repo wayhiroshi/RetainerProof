@@ -351,6 +351,28 @@ test("one workspace cannot read or write another workspace data", async ({ brows
   const publicAfterRevoke = await request.get(`${baseURL}/api/public/reports/${shareTokenA}`);
   expect(publicAfterRevoke.status()).toBe(404);
 
+  const correction = await request.post(`${baseURL}/api/reports/${reportA}/correction`, {
+    headers: { origin: baseURL ?? "http://localhost:5173" },
+  });
+  expect(correction.status()).toBe(201);
+  const correctionPayload = (await correction.json()) as {
+    reportId: string;
+    revision: number;
+    snapshot: { period: { start: string; end: string } };
+  };
+  expect(correctionPayload.reportId).toBe(reportA);
+  expect(correctionPayload.revision).toBe(2);
+  expect(correctionPayload.snapshot.period).toMatchObject({
+    start: new Date((now - 86400) * 1000).toISOString(),
+    end: new Date(now * 1000).toISOString(),
+  });
+  expect((await request.post(`${baseURL}/api/reports/${reportA}/correction`, {
+    headers: { origin: baseURL ?? "http://localhost:5173" },
+  })).status()).toBe(409);
+  expect((await request.post(`${baseURL}/api/reports/${reportB}/correction`, {
+    headers: { origin: baseURL ?? "http://localhost:5173" },
+  })).status()).toBe(404);
+
   const asyncFailurePayload = JSON.stringify({
     id: `evt_async_failed_${suffix}`,
     object: "event",
