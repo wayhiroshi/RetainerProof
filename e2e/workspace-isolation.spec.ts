@@ -12,6 +12,13 @@ test("one workspace cannot read or write another workspace data", async ({ brows
   const workspaceB = `workspace-b-${suffix}`;
   const clientA = `client-a-${suffix}`;
   const clientB = `client-b-${suffix}`;
+  const serviceA = `service-a-${suffix}`;
+  const serviceB = `service-b-${suffix}`;
+  const assetA = `asset-a-${suffix}`;
+  const assetB = `asset-b-${suffix}`;
+  const formMonitorA = `form-monitor-a-${suffix}`;
+  const formMonitorB = `form-monitor-b-${suffix}`;
+  const formRunB = `form-run-b-${suffix}`;
   const reportB = `report-b-${suffix}`;
   const reportA = `report-a-${suffix}`;
   const searchConnectionA = `search-connection-a-${suffix}`;
@@ -59,6 +66,23 @@ test("one workspace cannot read or write another workspace data", async ({ brows
     INSERT INTO clients (id,workspace_id,name,status,created_at,updated_at) VALUES
       ('${clientA}','${workspaceA}','Visible Client','active',${now},${now}),
       ('${clientB}','${workspaceB}','Hidden Client','active',${now},${now});
+    INSERT INTO services (id,workspace_id,client_id,name,created_at,updated_at) VALUES
+      ('${serviceA}','${workspaceA}','${clientA}','Website Care',${now},${now}),
+      ('${serviceB}','${workspaceB}','${clientB}','Website Care',${now},${now});
+    INSERT INTO managed_assets
+      (id,workspace_id,client_id,service_id,name,url,critical_urls_json,enabled,next_check_at,created_at,updated_at)
+      VALUES
+      ('${assetA}','${workspaceA}','${clientA}','${serviceA}','Visible Site','https://visible.example','[]',1,${now},${now},${now}),
+      ('${assetB}','${workspaceB}','${clientB}','${serviceB}','Hidden Site','https://hidden.example','[]',1,${now},${now},${now});
+    INSERT INTO form_monitors
+      (id,workspace_id,client_id,asset_id,name,url,form_type,require_turnstile,enabled,interval_hours,next_presence_check_at,next_submission_check_at,created_at,updated_at)
+      VALUES
+      ('${formMonitorA}','${workspaceA}','${clientA}','${assetA}','Visible Form','https://visible.example/contact','generic',0,1,24,${later},${later},${now},${now}),
+      ('${formMonitorB}','${workspaceB}','${clientB}','${assetB}','Hidden Form','https://hidden.example/contact','contact_form_7',1,1,24,${later},${later},${now},${now});
+    INSERT INTO form_check_runs
+      (id,workspace_id,monitor_id,mode,trigger,status,attempt,created_at,updated_at)
+      VALUES
+      ('${formRunB}','${workspaceB}','${formMonitorB}','submission','manual','pending',1,${now},${now});
     INSERT INTO search_console_connections
       (id,workspace_id,connected_by_user_id,encrypted_refresh_token,scope,connected_at,created_at,updated_at)
       VALUES
@@ -147,6 +171,38 @@ test("one workspace cannot read or write another workspace data", async ({ brows
   const clientPayload = (await clientResponse.json()) as { clients: Array<{ id: string; name: string }> };
   expect(clientPayload.clients.map((client) => client.id)).toEqual([clientA]);
   expect(clientPayload.clients.some((client) => client.name === "Hidden Client")).toBe(false);
+
+  const formMonitorResponse = await request.get(`${baseURL}/api/form-monitors`);
+  expect(formMonitorResponse.status()).toBe(200);
+  const formMonitorPayload = (await formMonitorResponse.json()) as {
+    monitors: Array<{ id: string; name: string }>;
+    runs: Array<{ id: string }>;
+  };
+  expect(formMonitorPayload.monitors).toEqual([
+    expect.objectContaining({ id: formMonitorA, name: "Visible Form" }),
+  ]);
+  expect(formMonitorPayload.runs).toEqual([]);
+  const writeHeaders = { origin: baseURL ?? "http://localhost:5173" };
+  expect((await request.patch(`${baseURL}/api/form-monitors/${formMonitorB}`, {
+    data: { enabled: false },
+    headers: writeHeaders,
+  })).status()).toBe(404);
+  expect((await request.post(`${baseURL}/api/form-monitors/${formMonitorB}/presence-checks`, {
+    headers: writeHeaders,
+  })).status()).toBe(404);
+  expect((await request.post(`${baseURL}/api/form-monitors/${formMonitorB}/submission-checks`, {
+    data: { trigger: "manual" },
+    headers: writeHeaders,
+  })).status()).toBe(404);
+  expect((await request.patch(`${baseURL}/api/form-check-runs/${formRunB}`, {
+    data: {
+      websiteSubmissionStatus: "passed",
+      wordpressReceiptStatus: "passed",
+      adminNotificationStatus: "passed",
+      autoReplyStatus: "passed",
+    },
+    headers: writeHeaders,
+  })).status()).toBe(404);
 
   const localeHeaders = { origin: baseURL ?? "http://localhost:5173" };
   expect((await request.patch(`${baseURL}/api/me/locale`, {

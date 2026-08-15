@@ -281,6 +281,83 @@ export const checkRuns = sqliteTable(
   (table) => [index("check_runs_workspace_asset_date_idx").on(table.workspaceId, table.assetId, table.checkedAt)],
 );
 
+export const formMonitors = sqliteTable(
+  "form_monitors",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    assetId: text("asset_id")
+      .notNull()
+      .references(() => managedAssets.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    url: text("url").notNull(),
+    formType: text("form_type", { enum: ["contact_form_7", "generic"] }).notNull(),
+    turnstileWidgetName: text("turnstile_widget_name"),
+    requireTurnstile: integer("require_turnstile", { mode: "boolean" }).notNull().default(false),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    intervalHours: integer("interval_hours").notNull().default(24),
+    nextPresenceCheckAt: integer("next_presence_check_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
+    nextSubmissionCheckAt: integer("next_submission_check_at", { mode: "timestamp" }).notNull(),
+    lastPresencePassedAt: integer("last_presence_passed_at", { mode: "timestamp" }),
+    lastSubmissionPassedAt: integer("last_submission_passed_at", { mode: "timestamp" }),
+    incidentOpenedAt: integer("incident_opened_at", { mode: "timestamp" }),
+    lastRecoveredAt: integer("last_recovered_at", { mode: "timestamp" }),
+    ...timestamps,
+  },
+  (table) => [
+    index("form_monitors_due_idx").on(table.enabled, table.nextPresenceCheckAt),
+    index("form_monitors_workspace_client_idx").on(table.workspaceId, table.clientId),
+  ],
+);
+
+const formCheckpointStatuses = ["not_checked", "passed", "failed", "manual_required"] as const;
+
+export const formCheckRuns = sqliteTable(
+  "form_check_runs",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    monitorId: text("monitor_id")
+      .notNull()
+      .references(() => formMonitors.id, { onDelete: "cascade" }),
+    mode: text("mode", { enum: ["presence", "submission"] }).notNull(),
+    trigger: text("trigger", { enum: ["scheduled_presence", "scheduled_submission", "post_change", "manual"] }).notNull(),
+    status: text("status", { enum: ["queued", "pending", "passed", "failed", "manual_required"] }).notNull(),
+    attempt: integer("attempt").notNull().default(1),
+    pageReachable: integer("page_reachable", { mode: "boolean" }),
+    formPresent: integer("form_present", { mode: "boolean" }),
+    turnstileScriptPresent: integer("turnstile_script_present", { mode: "boolean" }),
+    turnstileWidgetPresent: integer("turnstile_widget_present", { mode: "boolean" }),
+    submitControlPresent: integer("submit_control_present", { mode: "boolean" }),
+    requiredFieldsPresent: integer("required_fields_present", { mode: "boolean" }),
+    websiteSubmissionStatus: text("website_submission_status", { enum: formCheckpointStatuses }).notNull().default("not_checked"),
+    websiteSubmittedAt: integer("website_submitted_at", { mode: "timestamp" }),
+    wordpressReceiptStatus: text("wordpress_receipt_status", { enum: formCheckpointStatuses }).notNull().default("not_checked"),
+    wordpressReceivedAt: integer("wordpress_received_at", { mode: "timestamp" }),
+    adminNotificationStatus: text("admin_notification_status", { enum: formCheckpointStatuses }).notNull().default("not_checked"),
+    adminNotificationAt: integer("admin_notification_at", { mode: "timestamp" }),
+    autoReplyStatus: text("auto_reply_status", { enum: formCheckpointStatuses }).notNull().default("not_checked"),
+    autoReplyAt: integer("auto_reply_at", { mode: "timestamp" }),
+    statusCode: integer("status_code"),
+    durationMs: integer("duration_ms"),
+    errorCode: text("error_code"),
+    startedAt: integer("started_at", { mode: "timestamp" }),
+    completedAt: integer("completed_at", { mode: "timestamp" }),
+    ...timestamps,
+  },
+  (table) => [
+    index("form_check_runs_workspace_monitor_date_idx").on(table.workspaceId, table.monitorId, table.createdAt),
+    index("form_check_runs_pending_idx").on(table.workspaceId, table.status, table.mode, table.createdAt),
+  ],
+);
+
 export const searchConsoleConnections = sqliteTable(
   "search_console_connections",
   {
@@ -483,6 +560,8 @@ export const schema = {
   checkDefinitions,
   activities,
   checkRuns,
+  formMonitors,
+  formCheckRuns,
   searchConsoleConnections,
   searchConsoleOauthStates,
   searchConsoleProperties,
@@ -499,3 +578,5 @@ export type ClientRow = typeof clients.$inferSelect;
 export type ActivityRow = typeof activities.$inferSelect;
 export type ManagedAssetRow = typeof managedAssets.$inferSelect;
 export type MaintenanceItemRow = typeof maintenanceItems.$inferSelect;
+export type FormMonitorRow = typeof formMonitors.$inferSelect;
+export type FormCheckRunRow = typeof formCheckRuns.$inferSelect;

@@ -70,6 +70,53 @@ type Activity = {
   visibility: "client_visible" | "internal_only" | "recommendation";
 };
 
+type FormMonitor = {
+  id: string;
+  clientId: string;
+  clientName: string;
+  assetId: string;
+  name: string;
+  url: string;
+  formType: "contact_form_7" | "generic";
+  turnstileWidgetName: string | null;
+  requireTurnstile: boolean;
+  enabled: boolean;
+  intervalHours: number;
+  nextPresenceCheckAt: string;
+  nextSubmissionCheckAt: string;
+  lastPresencePassedAt: string | null;
+  lastSubmissionPassedAt: string | null;
+  incidentOpenedAt: string | null;
+  lastRecoveredAt: string | null;
+};
+
+type FormCheckpointStatus = "not_checked" | "passed" | "failed" | "manual_required";
+
+type FormCheckRun = {
+  id: string;
+  workspaceId: string;
+  monitorId: string;
+  mode: "presence" | "submission";
+  trigger: "scheduled_presence" | "scheduled_submission" | "post_change" | "manual";
+  status: "queued" | "pending" | "passed" | "failed" | "manual_required";
+  attempt: number;
+  pageReachable: boolean | null;
+  formPresent: boolean | null;
+  turnstileScriptPresent: boolean | null;
+  turnstileWidgetPresent: boolean | null;
+  submitControlPresent: boolean | null;
+  requiredFieldsPresent: boolean | null;
+  websiteSubmissionStatus: FormCheckpointStatus;
+  wordpressReceiptStatus: FormCheckpointStatus;
+  adminNotificationStatus: FormCheckpointStatus;
+  autoReplyStatus: FormCheckpointStatus;
+  statusCode: number | null;
+  durationMs: number | null;
+  errorCode: string | null;
+  createdAt: string;
+  completedAt: string | null;
+};
+
 type Report = {
   id: string;
   clientId: string;
@@ -828,6 +875,7 @@ function AppShell() {
           <NavLink end to="/app"><Icon name="pulse" /> {tr(locale, "Overview", "概要")}</NavLink>
           <NavLink to="/app/clients"><Icon name="client" /> {tr(locale, "Clients", "クライアント")}</NavLink>
           <NavLink to="/app/activity"><Icon name="activity" /> {tr(locale, "Activity", "作業記録")}</NavLink>
+          <NavLink to="/app/forms"><Icon name="pulse" /> {tr(locale, "Forms", "フォーム監視")}</NavLink>
           <NavLink to="/app/search"><Icon name="pulse" /> {tr(locale, "Search", "検索分析")}</NavLink>
           <NavLink to="/app/reports"><Icon name="report" /> {tr(locale, "Reports", "レポート")}</NavLink>
         </nav>
@@ -851,6 +899,7 @@ function AppShell() {
           <Route index element={<Dashboard me={me} />} />
           <Route path="clients" element={<ClientsPage />} />
           <Route path="activity" element={<ActivityPage />} />
+          <Route path="forms" element={<FormHealthPage />} />
           <Route path="search" element={<SearchConsolePage />} />
           <Route path="reports" element={<ReportsPage />} />
           <Route path="billing" element={<BillingPage me={me} />} />
@@ -1367,6 +1416,256 @@ function ActivityPage() {
             )}
             {error && <div className="form-error">{error}</div>}
             <div className="modal-actions"><button type="button" className="button button-ghost" onClick={() => setOpen(false)}>{tr(locale, "Cancel", "キャンセル")}</button><button className="button">{tr(locale, "Save activity", "作業を保存")} <Icon name="check" /></button></div>
+          </form>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+function FormHealthPage() {
+  const locale = useUiLocale();
+  const [clients, setClients] = useState<Client[]>([]);
+  const [monitors, setMonitors] = useState<FormMonitor[]>([]);
+  const [runs, setRuns] = useState<FormCheckRun[]>([]);
+  const [open, setOpen] = useState(false);
+  const [editingRun, setEditingRun] = useState<FormCheckRun | null>(null);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+
+  const load = useCallback(async () => {
+    setError("");
+    try {
+      const [clientResult, monitorResult] = await Promise.all([
+        api<{ clients: Client[] }>("/api/clients"),
+        api<{ monitors: FormMonitor[]; runs: FormCheckRun[] }>("/api/form-monitors"),
+      ]);
+      setClients(clientResult.clients);
+      setMonitors(monitorResult.monitors);
+      setRuns(monitorResult.runs);
+    } catch {
+      setError(tr(locale, "Could not load form monitoring.", "フォーム監視を読み込めませんでした。"));
+    }
+  }, [locale]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  async function createMonitor(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const client = clients.find((item) => item.id === data.get("clientId"));
+    if (!client?.asset) return;
+    setBusy("create");
+    setError("");
+    try {
+      await api("/api/form-monitors", {
+        method: "POST",
+        body: JSON.stringify({
+          clientId: client.id,
+          assetId: client.asset.id,
+          name: data.get("name"),
+          url: data.get("url"),
+          formType: data.get("formType"),
+          turnstileWidgetName: data.get("turnstileWidgetName") || undefined,
+          requireTurnstile: data.get("requireTurnstile") === "on",
+          intervalHours: Number(data.get("intervalHours") || 24),
+        }),
+      });
+      form.reset();
+      setOpen(false);
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : tr(locale, "Could not add form monitoring.", "フォーム監視を追加できませんでした。"));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function queuePresence(monitor: FormMonitor) {
+    setBusy(`presence-${monitor.id}`);
+    setError("");
+    try {
+      await api(`/api/form-monitors/${monitor.id}/presence-checks`, { method: "POST" });
+      window.setTimeout(() => void load(), 1_000);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : tr(locale, "Could not queue the check.", "確認を開始できませんでした。"));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function createSubmission(monitor: FormMonitor, trigger: "manual" | "post_change") {
+    setBusy(`${trigger}-${monitor.id}`);
+    setError("");
+    try {
+      await api(`/api/form-monitors/${monitor.id}/submission-checks`, {
+        method: "POST",
+        body: JSON.stringify({ trigger }),
+      });
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : tr(locale, "Could not create the supervised test.", "実送信確認を作成できませんでした。"));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function toggleMonitor(monitor: FormMonitor) {
+    setBusy(`toggle-${monitor.id}`);
+    try {
+      await api(`/api/form-monitors/${monitor.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled: !monitor.enabled }),
+      });
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : tr(locale, "Could not update monitoring.", "監視設定を更新できませんでした。"));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function saveSubmission(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editingRun) return;
+    const data = new FormData(event.currentTarget);
+    setBusy(`run-${editingRun.id}`);
+    setError("");
+    try {
+      await api(`/api/form-check-runs/${editingRun.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          websiteSubmissionStatus: data.get("websiteSubmissionStatus"),
+          wordpressReceiptStatus: data.get("wordpressReceiptStatus"),
+          adminNotificationStatus: data.get("adminNotificationStatus"),
+          autoReplyStatus: data.get("autoReplyStatus"),
+        }),
+      });
+      setEditingRun(null);
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : tr(locale, "Could not save the checkpoints.", "確認結果を保存できませんでした。"));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  const pendingRuns = runs.filter((run) => run.mode === "submission" && ["pending", "manual_required"].includes(run.status));
+  const latestPresence = (monitorId: string) => runs.find((run) => run.monitorId === monitorId && run.mode === "presence");
+  const monitorName = (monitorId: string) => monitors.find((monitor) => monitor.id === monitorId)?.name ?? monitorId;
+  const date = (value: string | null) => value
+    ? new Date(value).toLocaleString(locale === "ja" ? "ja-JP" : "en-US", { dateStyle: "medium", timeStyle: "short" })
+    : tr(locale, "Not yet", "未実施");
+
+  return (
+    <>
+      <PageHeader kicker={tr(locale, "FUNCTIONS CLIENTS RELY ON", "お問い合わせを止めないために")} title={tr(locale, "Form health", "フォーム正常性") }>
+        <button className="button button-small" disabled={!clients.some((client) => client.asset)} onClick={() => setOpen(true)}><Icon name="plus" /> {tr(locale, "Add form", "フォームを追加")}</button>
+      </PageHeader>
+      <div className="page-lead">
+        <p>{tr(locale, "Observe public form markers daily, then document supervised real submissions without storing form data.", "公開フォームの構成を日次確認し、入力内容を保存せずに実送信結果だけを記録します。")}</p>
+        <span>{tr(locale, `${monitors.length} forms`, `${monitors.length}フォーム`)}</span>
+      </div>
+      {error && <div className="form-error form-health-error">{error}</div>}
+
+      {pendingRuns.length > 0 && (
+        <section className="panel full-panel form-test-queue">
+          <div className="panel-heading"><div><small>{tr(locale, "SUPERVISED CHECKS", "実送信確認")}</small><h2>{tr(locale, "Tests waiting for a person", "手動確認が必要です")}</h2></div><span>{pendingRuns.length}</span></div>
+          <div className="form-test-list">
+            {pendingRuns.map((run) => (
+              <div className="form-test-row" key={run.id}>
+                <div><b>{monitorName(run.monitorId)}</b><small>{run.trigger.replaceAll("_", " ")} · ID {run.id}</small></div>
+                <span className={`form-status ${run.status}`}>{run.status.replaceAll("_", " ")}</span>
+                <button className="button button-small button-ghost" onClick={() => setEditingRun(run)}>{tr(locale, "Record checkpoints", "確認結果を記録")}</button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="form-monitor-grid">
+        {monitors.map((monitor) => {
+          const latest = latestPresence(monitor.id);
+          return (
+            <article className={`panel form-monitor-card ${monitor.incidentOpenedAt ? "has-incident" : ""}`} key={monitor.id}>
+              <div className="form-monitor-title">
+                <div><small>{monitor.clientName}</small><h2>{monitor.name}</h2></div>
+                <span className={`form-status ${monitor.incidentOpenedAt ? "failed" : latest?.status ?? "pending"}`}>{monitor.incidentOpenedAt ? tr(locale, "Needs attention", "要確認") : latest ? latest.status : tr(locale, "Not checked", "未確認")}</span>
+              </div>
+              <a href={monitor.url} target="_blank" rel="noreferrer" className="form-monitor-url">{monitor.url}</a>
+              <div className="form-monitor-meta">
+                <div><small>{tr(locale, "Form type", "フォーム種別")}</small><b>{monitor.formType === "contact_form_7" ? "Contact Form 7" : tr(locale, "Generic form", "一般フォーム")}</b></div>
+                <div><small>Turnstile</small><b>{monitor.requireTurnstile ? monitor.turnstileWidgetName || tr(locale, "Required", "必須") : tr(locale, "Not required", "必須ではない")}</b></div>
+                <div><small>{tr(locale, "Last display pass", "最終表示成功")}</small><b>{date(monitor.lastPresencePassedAt)}</b></div>
+                <div><small>{tr(locale, "Last real submission", "最終実送信成功")}</small><b>{date(monitor.lastSubmissionPassedAt)}</b></div>
+              </div>
+              {latest && (
+                <div className="form-evidence-strip">
+                  {[
+                    [tr(locale, "Page", "ページ"), latest.pageReachable],
+                    [tr(locale, "Form", "フォーム"), latest.formPresent],
+                    ["Turnstile", !monitor.requireTurnstile || (latest.turnstileScriptPresent && latest.turnstileWidgetPresent)],
+                    [tr(locale, "Controls", "項目"), latest.submitControlPresent && latest.requiredFieldsPresent],
+                  ].map(([label, passed]) => <span className={passed ? "passed" : "failed"} key={String(label)}>{passed ? "✓" : "×"} {label}</span>)}
+                </div>
+              )}
+              <div className="form-monitor-actions">
+                <button className="button button-small" disabled={busy === `presence-${monitor.id}` || !monitor.enabled} onClick={() => void queuePresence(monitor)}>{tr(locale, "Check now", "今すぐ確認")}</button>
+                <button className="button button-small button-ghost" disabled={Boolean(busy)} onClick={() => void createSubmission(monitor, "manual")}>{tr(locale, "Monthly test", "月次実送信")}</button>
+                <button className="text-button" disabled={Boolean(busy)} onClick={() => void createSubmission(monitor, "post_change")}>{tr(locale, "After change", "変更後確認")}</button>
+                <button className="text-button" disabled={Boolean(busy)} onClick={() => void toggleMonitor(monitor)}>{monitor.enabled ? tr(locale, "Pause", "一時停止") : tr(locale, "Resume", "再開")}</button>
+              </div>
+            </article>
+          );
+        })}
+        {!monitors.length && (
+          <div className="panel full-panel">
+            <EmptyState icon="pulse" title={tr(locale, "Add the forms clients depend on", "重要なフォームを登録しましょう")} text={tr(locale, "The first check only reads bounded public HTML. It never submits the form or solves Turnstile.", "最初の確認は公開HTMLを上限付きで読むだけです。送信やTurnstile操作は行いません。") }>
+              <button className="button button-small" disabled={!clients.some((client) => client.asset)} onClick={() => setOpen(true)}>{tr(locale, "Add form", "フォームを追加")}</button>
+            </EmptyState>
+          </div>
+        )}
+      </section>
+
+      {open && (
+        <Modal title={tr(locale, "Add shared form monitoring", "フォーム監視を追加")} onClose={() => setOpen(false)}>
+          <form className="stack-form" onSubmit={createMonitor}>
+            <label>{tr(locale, "Client", "クライアント")}<select name="clientId" required>{clients.filter((client) => client.asset).map((client) => <option value={client.id} key={client.id}>{client.name}</option>)}</select></label>
+            <label>{tr(locale, "Form name", "フォーム名")}<input name="name" required maxLength={120} placeholder={tr(locale, "Contact form", "お問い合わせフォーム")} /></label>
+            <label>{tr(locale, "Public form URL", "公開フォームURL")}<input name="url" type="url" required placeholder="https://example.com/contact/" /></label>
+            <div className="form-row">
+              <label>{tr(locale, "Form type", "フォーム種別")}<select name="formType" defaultValue="contact_form_7"><option value="contact_form_7">Contact Form 7</option><option value="generic">{tr(locale, "Generic form", "一般フォーム")}</option></select></label>
+              <label>{tr(locale, "Check interval", "確認間隔")}<select name="intervalHours" defaultValue="24"><option value="24">{tr(locale, "Daily", "毎日")}</option><option value="12">{tr(locale, "Every 12 hours", "12時間ごと")}</option><option value="168">{tr(locale, "Weekly", "毎週")}</option></select></label>
+            </div>
+            <label className="checkbox-row"><input type="checkbox" name="requireTurnstile" defaultChecked /><span>{tr(locale, "Require Turnstile script and widget markers", "Turnstileスクリプトとウィジェットを必須にする")}</span></label>
+            <label>{tr(locale, "Turnstile widget name", "Turnstileウィジェット名")} <span className="optional">{tr(locale, "no key", "キーは入力しません")}</span><input name="turnstileWidgetName" maxLength={120} placeholder="example.com WordPress forms" /></label>
+            <p className="privacy-note">{tr(locale, "Do not enter site keys, secret keys, credentials, test addresses, or form values.", "サイトキー、秘密鍵、認証情報、テスト用アドレス、フォーム入力値は登録しないでください。")}</p>
+            <div className="modal-actions"><button type="button" className="button button-ghost" onClick={() => setOpen(false)}>{tr(locale, "Cancel", "キャンセル")}</button><button className="button" disabled={busy === "create"}>{tr(locale, "Add monitoring", "監視を追加")}</button></div>
+          </form>
+        </Modal>
+      )}
+
+      {editingRun && (
+        <Modal title={tr(locale, "Record supervised checkpoints", "実送信の確認結果")} onClose={() => setEditingRun(null)}>
+          <form className="stack-form" onSubmit={saveSubmission}>
+            <p>{monitorName(editingRun.monitorId)}</p>
+            <p className="test-id"><small>{tr(locale, "Test ID", "テストID")}</small><code>{editingRun.id}</code></p>
+            <p className="privacy-note">{tr(locale, "Use dedicated test data outside RetainerProof. Complete Turnstile normally; never bypass it. Only checkpoint state and time are saved.", "専用テスト情報はRetainerProof外で管理し、Turnstileは通常どおり操作してください。保存するのは成否と時刻だけです。")}</p>
+            {[
+              ["websiteSubmissionStatus", tr(locale, "Website accepted the submission", "Webサイトが送信を受け付けた")],
+              ["wordpressReceiptStatus", tr(locale, "WordPress recorded the submission", "WordPressで受付を確認した")],
+              ["adminNotificationStatus", tr(locale, "Administrator notification arrived", "管理者通知が届いた")],
+              ["autoReplyStatus", tr(locale, "Auto-reply arrived", "自動返信が届いた")],
+            ].map(([name, label]) => (
+              <label key={name}>{label}<select name={name} defaultValue={editingRun[name as keyof FormCheckRun] as string}>
+                <option value="not_checked">{tr(locale, "Not checked", "未確認")}</option>
+                <option value="passed">{tr(locale, "Passed", "成功")}</option>
+                <option value="failed">{tr(locale, "Failed", "失敗")}</option>
+                <option value="manual_required">{tr(locale, "Manual action required", "手動操作が必要")}</option>
+              </select></label>
+            ))}
+            <div className="modal-actions"><button type="button" className="button button-ghost" onClick={() => setEditingRun(null)}>{tr(locale, "Cancel", "キャンセル")}</button><button className="button" disabled={busy === `run-${editingRun.id}`}>{tr(locale, "Save checkpoints", "確認結果を保存")}</button></div>
           </form>
         </Modal>
       )}
@@ -2347,11 +2646,12 @@ const legalCopy = {
   privacy: {
     label: "PRIVACY POLICY",
     title: "Collect less. Explain what moves.",
-    updated: "Draft updated July 30, 2026",
+    updated: "Draft updated August 16, 2026",
     sections: [
       ["Data we process", "We process account email, workspace and client labels, public website URLs, maintenance records, monitoring observations, report content, delivery status, and billing identifiers. We do not need website administrator credentials."],
       ["AI rewriting", "AI is used only when you press Rewrite for client. We send the selected work description and minimal category context to Cloudflare Workers AI. We do not send internal notes, credentials, client email addresses, or unrelated account data. You approve the result before saving."],
       ["Google Search Console", "If you connect Google Search Console, we request read-only access. We store an encrypted refresh token, the properties and search queries you select, and daily aggregate clicks, impressions, click-through rate, and average position for report preparation. Search Console data is not sent to AI. Disconnecting revokes Google access and deletes the imported daily source data. Metrics already included in immutable finalized report revisions remain part of those reports until account deletion."],
+      ["Form health checks", "For a form you choose to monitor, we request only its public page and store marker results, HTTP status, timing, checkpoint states, and checkpoint times. Supervised submission checks store a test ID and the result of website submission, WordPress receipt, administrator notification, and automatic reply. We do not store secret keys, credentials, submitted field values, customer messages, recipient addresses, or email bodies, and we do not bypass human verification challenges."],
       ["Sharing and measurement", "Client reports use revocable, unguessable links. We record the first report view without a tracking pixel. Payment information is handled by Stripe and Link; we retain billing identifiers and event status rather than full card details."],
       ["Retention and deletion", "After account closure, customer content is scheduled for deletion within 30 days except records required for billing, fraud prevention, disputes, or law. Backups and exports expire on their own operational schedule."],
       ["Contact", `Request access, correction, export, or deletion at ${brand.supportEmail}. This policy must be completed with the legal entity, subprocessors, international transfer terms, and jurisdiction-specific disclosures before launch.`],

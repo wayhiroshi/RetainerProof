@@ -7,6 +7,8 @@ import {
   activities,
   aiRewrites,
   clients,
+  formCheckRuns,
+  formMonitors,
   maintenanceItems,
   managedAssets,
   reportDeliveries,
@@ -23,7 +25,7 @@ import { randomToken, sha256 } from "./lib/crypto";
 import { escapeHtml, sendTransactionalEmail } from "./lib/email";
 import { localized, normalizeLocale } from "./lib/locale";
 import { isValidTimeZone, reportPeriod } from "./lib/report-period";
-import { assertPublicHttpUrl } from "./lib/url-security";
+import { assertPublicHttpUrl, UnsafeUrlError } from "./lib/url-security";
 import { assertClientBelongsToWorkspace, ensureWorkspace } from "./lib/workspace";
 import { rewriteForClient } from "./services/ai";
 import {
@@ -34,6 +36,13 @@ import {
   handleStripeWebhook,
 } from "./services/billing";
 import { enqueueDueChecks, type MonitorMessage, processMonitorMessage } from "./services/monitoring";
+import {
+  createDueSubmissionTasks,
+  enqueueDueFormPresenceChecks,
+  type FormPresenceMessage,
+  processFormPresenceMessage,
+  sendSubmissionFailureAlert,
+} from "./services/form-monitoring";
 import {
   buildReportSnapshot,
   renderReportHtml,
@@ -448,6 +457,236 @@ app.post("/api/search-console/sync", async (c) => {
 app.delete("/api/search-console/connection", async (c) => {
   await revokeSearchConsoleConnection(c.env, c.get("workspace").id);
   return c.json({ disconnected: true });
+});
+
+app.get("/api/form-monitors", async (c) => {
+  const workspaceId = c.get("workspace").id;
+  const db = drizzle(c.env.DB);
+  const [monitors, runs] = await Promise.all([
+    db
+      .select({
+        id: formMonitors.id,
+        clientId: formMonitors.clientId,
+        clientName: clients.name,
+        assetId: formMonitors.assetId,
+        name: formMonitors.name,
+        url: formMonitors.url,
+        formType: formMonitors.formType,
+        turnstileWidgetName: formMonitors.turnstileWidgetName,
+        requireTurnstile: formMonitors.requireTurnstile,
+        enabled: formMonitors.enabled,
+        intervalHours: formMonitors.intervalHours,
+        nextPresenceCheckAt: formMonitors.nextPresenceCheckAt,
+        nextSubmissionCheckAt: formMonitors.nextSubmissionCheckAt,
+        lastPresencePassedAt: formMonitors.lastPresencePassedAt,
+        lastSubmissionPassedAt: formMonitors.lastSubmissionPassedAt,
+        incidentOpenedAt: formMonitors.incidentOpenedAt,
+        lastRecoveredAt: formMonitors.lastRecoveredAt,
+      })
+      .from(formMonitors)
+      .innerJoin(clients, eq(clients.id, formMonitors.clientId))
+      .where(eq(formMonitors.workspaceId, workspaceId))
+      .orderBy(asc(clients.name), asc(formMonitors.name)),
+    db
+      .select()
+      .from(formCheckRuns)
+      .where(eq(formCheckRuns.workspaceId, workspaceId))
+      .orderBy(desc(formCheckRuns.createdAt))
+      .limit(200),
+  ]);
+  return c.json({ monitors, runs });
+});
+
+app.post("/api/form-monitors", async (c) => {
+  const input = formMonitorInputSchema.parse(await c.req.json());
+  const workspaceId = c.get("workspace").id;
+  await assertClientBelongsToWorkspace(c.env, workspaceId, input.clientId);
+  const db = drizzle(c.env.DB);
+  const asset = await db
+    .select({ id: managedAssets.id })
+    .from(managedAssets)
+    .where(and(
+      eq(managedAssets.id, input.assetId),
+      eq(managedAssets.clientId, input.clientId),
+      eq(managedAssets.workspaceId, workspaceId),
+    ))
+    .get();
+  if (!asset) return c.json({ error: "ASSET_NOT_FOUND" }, 404);
+  const [{ value: monitorCount }] = await db
+    .select({ value: count() })
+    .from(formMonitors)
+    .where(and(eq(formMonitors.workspaceId, workspaceId), eq(formMonitors.clientId, input.clientId)));
+  if (monitorCount >= 10) return c.json({ error: "FORM_MONITOR_LIMIT_REACHED", limit: 10 }, 409);
+  const url = await assertPublicHttpUrl(input.url);
+  const now = new Date();
+  const nextSubmissionCheckAt = new Date(now);
+  nextSubmissionCheckAt.setUTCMonth(nextSubmissionCheckAt.getUTCMonth() + 1);
+  const id = crypto.randomUUID();
+  await db.insert(formMonitors).values({
+    id,
+    workspaceId,
+    clientId: input.clientId,
+    assetId: asset.id,
+    name: input.name,
+    url: url.toString(),
+    formType: input.formType,
+    turnstileWidgetName: input.turnstileWidgetName || null,
+    requireTurnstile: input.requireTurnstile,
+    intervalHours: input.intervalHours,
+    enabled: true,
+    nextPresenceCheckAt: now,
+    nextSubmissionCheckAt,
+    createdAt: now,
+    updatedAt: now,
+  });
+  return c.json({ id }, 201);
+});
+
+app.patch("/api/form-monitors/:id", async (c) => {
+  const input = formMonitorUpdateSchema.parse(await c.req.json());
+  const workspaceId = c.get("workspace").id;
+  const db = drizzle(c.env.DB);
+  const existing = await db
+    .select()
+    .from(formMonitors)
+    .where(and(eq(formMonitors.id, c.req.param("id")), eq(formMonitors.workspaceId, workspaceId)))
+    .get();
+  if (!existing) return c.json({ error: "FORM_MONITOR_NOT_FOUND" }, 404);
+  const nextUrl = input.url ? (await assertPublicHttpUrl(input.url)).toString() : undefined;
+  await db
+    .update(formMonitors)
+    .set({
+      ...input,
+      ...(nextUrl ? { url: nextUrl } : {}),
+      turnstileWidgetName: input.turnstileWidgetName === "" ? null : input.turnstileWidgetName,
+      ...(input.enabled === true && !existing.enabled ? { nextPresenceCheckAt: new Date() } : {}),
+      updatedAt: new Date(),
+    })
+    .where(and(eq(formMonitors.id, existing.id), eq(formMonitors.workspaceId, workspaceId)));
+  return c.json({ updated: true });
+});
+
+app.post("/api/form-monitors/:id/presence-checks", async (c) => {
+  const workspaceId = c.get("workspace").id;
+  const db = drizzle(c.env.DB);
+  const monitor = await db
+    .select({ id: formMonitors.id })
+    .from(formMonitors)
+    .where(and(eq(formMonitors.id, c.req.param("id")), eq(formMonitors.workspaceId, workspaceId)))
+    .get();
+  if (!monitor) return c.json({ error: "FORM_MONITOR_NOT_FOUND" }, 404);
+  await c.env.MONITOR_QUEUE.send({
+    type: "form_presence_check",
+    workspaceId,
+    monitorId: monitor.id,
+    attempt: 1,
+  } satisfies FormPresenceMessage);
+  return c.json({ queued: true }, 202);
+});
+
+app.post("/api/form-monitors/:id/submission-checks", async (c) => {
+  const input = submissionCheckCreateSchema.parse(await c.req.json().catch(() => ({})));
+  const workspaceId = c.get("workspace").id;
+  const db = drizzle(c.env.DB);
+  const monitor = await db
+    .select({ id: formMonitors.id })
+    .from(formMonitors)
+    .where(and(eq(formMonitors.id, c.req.param("id")), eq(formMonitors.workspaceId, workspaceId)))
+    .get();
+  if (!monitor) return c.json({ error: "FORM_MONITOR_NOT_FOUND" }, 404);
+  const id = crypto.randomUUID();
+  const now = new Date();
+  await db.insert(formCheckRuns).values({
+    id,
+    workspaceId,
+    monitorId: monitor.id,
+    mode: "submission",
+    trigger: input.trigger,
+    status: "pending",
+    createdAt: now,
+    updatedAt: now,
+  });
+  return c.json({ id, status: "pending" }, 201);
+});
+
+app.patch("/api/form-check-runs/:id", async (c) => {
+  const input = submissionCheckUpdateSchema.parse(await c.req.json());
+  const workspaceId = c.get("workspace").id;
+  const db = drizzle(c.env.DB);
+  const row = await db
+    .select({ run: formCheckRuns, monitorName: formMonitors.name })
+    .from(formCheckRuns)
+    .innerJoin(formMonitors, eq(formMonitors.id, formCheckRuns.monitorId))
+    .where(and(
+      eq(formCheckRuns.id, c.req.param("id")),
+      eq(formCheckRuns.workspaceId, workspaceId),
+      eq(formMonitors.workspaceId, workspaceId),
+    ))
+    .get();
+  if (!row || row.run.mode !== "submission") return c.json({ error: "FORM_CHECK_NOT_FOUND" }, 404);
+  const statuses = [
+    input.websiteSubmissionStatus,
+    input.wordpressReceiptStatus,
+    input.adminNotificationStatus,
+    input.autoReplyStatus,
+  ];
+  const status = statuses.includes("manual_required")
+    ? "manual_required"
+    : statuses.includes("failed")
+      ? "failed"
+      : statuses.every((value) => value === "passed")
+        ? "passed"
+        : "pending";
+  const now = new Date();
+  const checkpointTime = (checkpointStatus: typeof statuses[number], value?: string) =>
+    checkpointStatus === "not_checked" ? null : value ? new Date(value) : now;
+  await db
+    .update(formCheckRuns)
+    .set({
+      websiteSubmissionStatus: input.websiteSubmissionStatus,
+      websiteSubmittedAt: checkpointTime(input.websiteSubmissionStatus, input.websiteSubmittedAt),
+      wordpressReceiptStatus: input.wordpressReceiptStatus,
+      wordpressReceivedAt: checkpointTime(input.wordpressReceiptStatus, input.wordpressReceivedAt),
+      adminNotificationStatus: input.adminNotificationStatus,
+      adminNotificationAt: checkpointTime(input.adminNotificationStatus, input.adminNotificationAt),
+      autoReplyStatus: input.autoReplyStatus,
+      autoReplyAt: checkpointTime(input.autoReplyStatus, input.autoReplyAt),
+      status,
+      startedAt: row.run.startedAt ?? now,
+      completedAt: status === "pending" ? null : now,
+      durationMs: status === "pending" ? null : Math.max(0, now.getTime() - (row.run.startedAt ?? now).getTime()),
+      errorCode: status === "failed"
+        ? "SUBMISSION_CHECK_FAILED"
+        : status === "manual_required"
+          ? "HUMAN_ACTION_REQUIRED"
+          : null,
+      updatedAt: now,
+    })
+    .where(and(eq(formCheckRuns.id, row.run.id), eq(formCheckRuns.workspaceId, workspaceId)));
+  if (status === "passed") {
+    await db
+      .update(formMonitors)
+      .set({ lastSubmissionPassedAt: now, updatedAt: now })
+      .where(and(eq(formMonitors.id, row.run.monitorId), eq(formMonitors.workspaceId, workspaceId)));
+  }
+  if (status === "failed" && row.run.status !== "failed") {
+    const labels = [
+      ["website_submission", input.websiteSubmissionStatus],
+      ["wordpress_receipt", input.wordpressReceiptStatus],
+      ["admin_notification", input.adminNotificationStatus],
+      ["auto_reply", input.autoReplyStatus],
+    ].filter(([, value]) => value === "failed").map(([label]) => label);
+    try {
+      await sendSubmissionFailureAlert(c.env, workspaceId, row.run.monitorId, row.monitorName, labels);
+    } catch {
+      console.error(JSON.stringify({
+        event: "form_submission_alert_failed",
+        monitorId: row.run.monitorId,
+        provider: "resend",
+      }));
+    }
+  }
+  return c.json({ status });
 });
 
 app.get("/api/clients", async (c) => {
@@ -975,7 +1214,7 @@ app.notFound((c) => c.env.ASSETS.fetch(c.req.raw));
 app.onError((error, c) => {
   const code = error instanceof z.ZodError ? "VALIDATION_ERROR" : error instanceof Error ? error.message : "INTERNAL_ERROR";
   console.error(JSON.stringify({ event: "request_error", path: c.req.path, code }));
-  const status = code === "VALIDATION_ERROR" || code === "GOOGLE_OAUTH_STATE_INVALID"
+  const status = code === "VALIDATION_ERROR" || code === "GOOGLE_OAUTH_STATE_INVALID" || error instanceof UnsafeUrlError
     ? 400
     : code === "CLIENT_NOT_FOUND" ||
         code === "REPORT_NOT_FOUND" ||
@@ -999,11 +1238,19 @@ export default {
   fetch: app.fetch,
   async scheduled(_controller, env, ctx) {
     ctx.waitUntil(
-      Promise.all([enqueueDueChecks(env), enqueueDueSearchConsoleSyncs(env), purgeDueWorkspaceData(env)]).then(([count, searchConsoleCount, purged]) => {
+      Promise.all([
+        enqueueDueChecks(env),
+        enqueueDueSearchConsoleSyncs(env),
+        enqueueDueFormPresenceChecks(env),
+        createDueSubmissionTasks(env),
+        purgeDueWorkspaceData(env),
+      ]).then(([count, searchConsoleCount, formPresenceCount, formSubmissionCount, purged]) => {
         console.log(JSON.stringify({
           event: "scheduled_complete",
           monitorEnqueued: count,
           searchConsoleEnqueued: searchConsoleCount,
+          formPresenceEnqueued: formPresenceCount,
+          formSubmissionCreated: formSubmissionCount,
           workspacesPurged: purged,
         }));
       }),
@@ -1014,6 +1261,8 @@ export default {
       try {
         if (isSearchConsoleSyncMessage(message.body)) {
           await syncClientSearchConsole(env, message.body.workspaceId, message.body.clientId);
+        } else if (isFormPresenceMessage(message.body)) {
+          await processFormPresenceMessage(env, message.body);
         } else {
           await processMonitorMessage(env, message.body);
         }
@@ -1024,12 +1273,18 @@ export default {
       }
     }
   },
-} satisfies ExportedHandler<Env, MonitorMessage | SearchConsoleSyncMessage>;
+} satisfies ExportedHandler<Env, MonitorMessage | SearchConsoleSyncMessage | FormPresenceMessage>;
 
 function isSearchConsoleSyncMessage(
-  message: MonitorMessage | SearchConsoleSyncMessage,
+  message: MonitorMessage | SearchConsoleSyncMessage | FormPresenceMessage,
 ): message is SearchConsoleSyncMessage {
   return "type" in message && message.type === "search_console_sync";
+}
+
+function isFormPresenceMessage(
+  message: MonitorMessage | SearchConsoleSyncMessage | FormPresenceMessage,
+): message is FormPresenceMessage {
+  return "type" in message && message.type === "form_presence_check";
 }
 
 const clientInputSchema = z.object({
@@ -1054,6 +1309,39 @@ const searchConsoleKeywordSchema = z.object({
   clientId: z.string().min(1),
   propertyId: z.string().min(1),
   keyword: z.string().trim().min(1).max(120),
+});
+const formMonitorInputSchema = z.object({
+  clientId: z.string().min(1),
+  assetId: z.string().min(1),
+  name: z.string().trim().min(1).max(120),
+  url: z.url(),
+  formType: z.enum(["contact_form_7", "generic"]),
+  turnstileWidgetName: z.string().trim().max(120).optional().default(""),
+  requireTurnstile: z.boolean().optional().default(false),
+  intervalHours: z.number().int().min(6).max(168).optional().default(24),
+});
+const formMonitorUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  url: z.url().optional(),
+  formType: z.enum(["contact_form_7", "generic"]).optional(),
+  turnstileWidgetName: z.string().trim().max(120).optional(),
+  requireTurnstile: z.boolean().optional(),
+  intervalHours: z.number().int().min(6).max(168).optional(),
+  enabled: z.boolean().optional(),
+}).refine((input) => Object.keys(input).length > 0);
+const submissionCheckCreateSchema = z.object({
+  trigger: z.enum(["manual", "post_change"]).optional().default("manual"),
+});
+const checkpointStatusSchema = z.enum(["not_checked", "passed", "failed", "manual_required"]);
+const submissionCheckUpdateSchema = z.object({
+  websiteSubmissionStatus: checkpointStatusSchema,
+  websiteSubmittedAt: z.iso.datetime().optional(),
+  wordpressReceiptStatus: checkpointStatusSchema,
+  wordpressReceivedAt: z.iso.datetime().optional(),
+  adminNotificationStatus: checkpointStatusSchema,
+  adminNotificationAt: z.iso.datetime().optional(),
+  autoReplyStatus: checkpointStatusSchema,
+  autoReplyAt: z.iso.datetime().optional(),
 });
 const outcomeTypes = ["work_completed", "issue_resolved", "risk_reduced", "routine_verification"] as const;
 const recommendationPriorities = ["low", "medium", "high"] as const;

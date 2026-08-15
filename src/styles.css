@@ -653,6 +653,35 @@ svg { width: 1.1em; height: 1.1em; }
 .public-error h1 { font-family: "DM Serif Display", serif; font-size: 40px; font-weight: 400; margin-bottom: 0; }
 .public-error p { color: #6e7f79; }
 
+.form-health-error { margin: 0 0 20px; }
+.form-monitor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; padding-bottom: 42px; }
+.form-monitor-card { padding: 28px; }
+.form-monitor-card.has-incident { border-color: #c77d67; box-shadow: inset 4px 0 #b15e49; }
+.form-monitor-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.form-monitor-title small,.form-monitor-meta small,.test-id small { display: block; color: #7c8b85; font-size: 9px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
+.form-monitor-title h2 { margin: 6px 0 0; font-family: "DM Serif Display", serif; font-size: 25px; font-weight: 400; }
+.form-status { display: inline-flex; align-items: center; min-height: 26px; padding: 0 10px; border-radius: 20px; color: #53675f; background: #e7ebe7; font-size: 9px; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+.form-status.passed { color: #2f654d; background: #dceadd; }
+.form-status.failed { color: #914b3d; background: #f2ddd6; }
+.form-status.manual_required { color: #765c2f; background: #eee5cb; }
+.form-monitor-url { display: block; margin-top: 14px; color: #55746a; font-size: 11px; overflow-wrap: anywhere; }
+.form-monitor-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 24px; padding: 20px 0; border-top: 1px solid #dfdfd7; border-bottom: 1px solid #dfdfd7; }
+.form-monitor-meta b { display: block; margin-top: 5px; color: #263e36; font-size: 11px; }
+.form-evidence-strip { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.form-evidence-strip span { padding: 6px 8px; border-radius: 3px; font-size: 9px; font-weight: 700; }
+.form-evidence-strip .passed { color: #32674c; background: #e1ece2; }
+.form-evidence-strip .failed { color: #944d3e; background: #f3dfd8; }
+.form-monitor-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-top: 22px; }
+.form-test-queue { margin-bottom: 22px; }
+.form-test-list { display: grid; }
+.form-test-row { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 15px; padding: 15px 0; border-top: 1px solid #dfdfd7; }
+.form-test-row small { display: block; margin-top: 4px; color: #7d8a85; font-size: 9px; overflow-wrap: anywhere; }
+.privacy-note { padding: 12px 14px; color: #65756f; background: #eef1ed; font-size: 11px; line-height: 1.6; }
+.checkbox-row { display: flex !important; flex-direction: row !important; align-items: center; gap: 9px; }
+.checkbox-row input { width: auto; }
+.test-id { display: grid; gap: 6px; }
+.test-id code { padding: 9px 10px; color: #34594d; background: #edf1ed; font-size: 10px; overflow-wrap: anywhere; }
+
 @media print {
   .public-header { display: none; }
   .public-page { padding: 0; background: #fff; }
@@ -702,7 +731,7 @@ svg { width: 1.1em; height: 1.1em; }
   .sidebar > .logo, .sidebar-bottom { display: none; }
   .mobile-language-switch { position: fixed; top: 10px; right: 12px; z-index: 12; display: block; }
   .mobile-language-switch .language-switch { background: rgb(255 254 249 / 94%); box-shadow: 0 5px 18px rgb(25 52 44 / 12%); }
-  .sidebar nav { width: 100%; grid-template-columns: repeat(5, 1fr); }
+  .sidebar nav { width: 100%; grid-template-columns: repeat(6, 1fr); }
   .sidebar nav a { flex-direction: column; gap: 2px; padding: 6px; font-size: 8px; text-align: center; }
   .app-main { margin-left: 0; padding: 0 17px 90px; }
   .app-page-header { height: 92px; }
@@ -764,4 +793,6 @@ svg { width: 1.1em; height: 1.1em; }
   .search-console-account,.search-console-property > header,.search-console-property > footer { align-items: flex-start; flex-direction: column; }
   .search-console-setup,.search-console-property { padding: 27px 22px; }
   .search-keyword-add { grid-template-columns: 1fr; }
+  .form-monitor-grid { grid-template-columns: 1fr; }
+  .form-test-row { grid-template-columns: 1fr; }
 }

@@ -117,3 +117,12 @@ Add the Stripe price IDs for Starter monthly/yearly and Freelancer monthly/yearl
 ## Operations
 
 Alert on authentication, queue, monitoring, AI, PDF, email, and webhook failures. Logs must contain IDs and error codes, never secrets, AI input, report copy, or email bodies. Export D1 regularly and test restore. Schedule customer-content deletion within 30 days after closure, excluding legally required billing records.
+
+### Shared form-health checks
+
+- Register customer form pages through the generic Form health screen; do not create project-specific Worker branches or scripts.
+- The daily presence check performs a bounded public `GET` only. It confirms form, required-control, submit-control, and optional Turnstile markers without submitting data.
+- A first presence failure is retried after five minutes. Notify only after the second consecutive failure, then notify once when the markers recover.
+- Monthly and post-change submission checks are supervised tasks. Use dedicated test data outside RetainerProof, complete Turnstile normally, and store only the test ID, checkpoint state, and time.
+- Never store secret keys, credentials, form values, recipient addresses, or mail bodies. A human-verification challenge is recorded as `manual_required`; it must not be bypassed.
+- Treat a presence pass as evidence that the public form structure is visible, not proof that WordPress accepted a message or that either email arrived.
