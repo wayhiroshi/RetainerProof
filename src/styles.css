@@ -734,8 +734,12 @@ svg { width: 1.1em; height: 1.1em; }
   .sidebar nav { width: 100%; grid-template-columns: repeat(6, 1fr); }
   .sidebar nav a { flex-direction: column; gap: 2px; padding: 6px; font-size: 8px; text-align: center; }
   .app-main { margin-left: 0; padding: 0 17px 90px; }
-  .app-page-header { height: 92px; }
-  .app-page-header h1 { font-size: 27px; }
+  .app-page-header { min-height: 104px; height: auto; gap: 12px; padding: 22px 0 17px; align-items: flex-start; }
+  .app-page-header h1 { font-size: 23px; white-space: nowrap; }
+  .app-page-header > .button { min-height: 40px; padding: 0 12px; font-size: 9px; white-space: nowrap; }
+  .page-lead { gap: 16px; }
+  .page-lead p { min-width: 0; margin: 0; }
+  .page-lead > span { flex: 0 0 auto; white-space: nowrap; }
   .dashboard-intro { padding: 28px 24px; }
   .month-ring { display: none; }
   .stat-grid { grid-template-columns: 1fr; }
