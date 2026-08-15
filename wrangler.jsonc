@@ -107,7 +107,8 @@
       "d1_databases": [
         {
           "binding": "DB",
-          "database_name": "retainerproof-production"
+          "database_name": "retainerproof-production",
+          "database_id": "3b578124-5bae-4188-ac09-e3502f4c6953"
         }
       ],
       "r2_buckets": [
