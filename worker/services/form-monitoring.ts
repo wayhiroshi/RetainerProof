@@ -13,6 +13,7 @@ export interface FormPresenceMessage {
   workspaceId: string;
   monitorId: string;
   attempt: 1 | 2;
+  trigger?: "scheduled_presence" | "manual";
 }
 
 export interface FormPresenceResult {
@@ -46,6 +47,7 @@ export async function enqueueDueFormPresenceChecks(env: Env): Promise<number> {
       workspaceId: monitor.workspaceId,
       monitorId: monitor.id,
       attempt: 1,
+      trigger: "scheduled_presence",
     } satisfies FormPresenceMessage);
     await db
       .update(formMonitors)
@@ -138,7 +140,7 @@ export async function processFormPresenceMessage(env: Env, message: FormPresence
     workspaceId: monitor.workspaceId,
     monitorId: monitor.id,
     mode: "presence",
-    trigger: "scheduled_presence",
+    trigger: message.trigger ?? "scheduled_presence",
     status: result.passed ? "passed" : "failed",
     attempt: message.attempt,
     pageReachable: result.pageReachable,

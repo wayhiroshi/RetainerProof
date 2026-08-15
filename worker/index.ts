@@ -570,7 +570,7 @@ app.post("/api/form-monitors/:id/presence-checks", async (c) => {
   const workspaceId = c.get("workspace").id;
   const db = drizzle(c.env.DB);
   const monitor = await db
-    .select({ id: formMonitors.id })
+    .select({ id: formMonitors.id, intervalHours: formMonitors.intervalHours })
     .from(formMonitors)
     .where(and(eq(formMonitors.id, c.req.param("id")), eq(formMonitors.workspaceId, workspaceId)))
     .get();
@@ -580,7 +580,16 @@ app.post("/api/form-monitors/:id/presence-checks", async (c) => {
     workspaceId,
     monitorId: monitor.id,
     attempt: 1,
+    trigger: "manual",
   } satisfies FormPresenceMessage);
+  const now = new Date();
+  await db
+    .update(formMonitors)
+    .set({
+      nextPresenceCheckAt: new Date(now.getTime() + monitor.intervalHours * 60 * 60 * 1_000),
+      updatedAt: now,
+    })
+    .where(and(eq(formMonitors.id, monitor.id), eq(formMonitors.workspaceId, workspaceId)));
   return c.json({ queued: true }, 202);
 });
 
