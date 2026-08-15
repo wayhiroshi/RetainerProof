@@ -203,6 +203,40 @@ test("one workspace cannot read or write another workspace data", async ({ brows
     },
     headers: writeHeaders,
   })).status()).toBe(404);
+  expect((await request.post(`${baseURL}/api/form-monitors`, {
+    data: {
+      clientId: clientA,
+      assetId: assetA,
+      name: "Blocked private form",
+      url: "http://127.0.0.1/contact",
+      formType: "generic",
+      requireTurnstile: false,
+    },
+    headers: writeHeaders,
+  })).status()).toBe(400);
+  const ownSubmissionResponse = await request.post(`${baseURL}/api/form-monitors/${formMonitorA}/submission-checks`, {
+    data: { trigger: "post_change" },
+    headers: writeHeaders,
+  });
+  expect(ownSubmissionResponse.status()).toBe(201);
+  const ownSubmission = (await ownSubmissionResponse.json()) as { id: string };
+  const ownSubmissionUpdate = await request.patch(`${baseURL}/api/form-check-runs/${ownSubmission.id}`, {
+    data: {
+      websiteSubmissionStatus: "passed",
+      wordpressReceiptStatus: "passed",
+      adminNotificationStatus: "passed",
+      autoReplyStatus: "passed",
+    },
+    headers: writeHeaders,
+  });
+  expect(ownSubmissionUpdate.status()).toBe(200);
+  expect(await ownSubmissionUpdate.json()).toEqual({ status: "passed" });
+  const formMonitorAfterSubmission = (await (await request.get(`${baseURL}/api/form-monitors`)).json()) as {
+    runs: Array<{ id: string; status: string; trigger: string }>;
+  };
+  expect(formMonitorAfterSubmission.runs).toEqual([
+    expect.objectContaining({ id: ownSubmission.id, status: "passed", trigger: "post_change" }),
+  ]);
 
   const localeHeaders = { origin: baseURL ?? "http://localhost:5173" };
   expect((await request.patch(`${baseURL}/api/me/locale`, {
